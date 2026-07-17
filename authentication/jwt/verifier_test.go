@@ -121,8 +121,12 @@ func TestVerifierHonorsClockSkewForMappedPrincipalExpiration(t *testing.T) {
 		ClockSkew: 30 * time.Second,
 	})
 
-	if _, err := v.Authenticate(context.Background(), authentication.Credential{Kind: "jwt", Token: []byte(raw)}); err != nil {
+	principal, err := v.Authenticate(context.Background(), authentication.Credential{Kind: "jwt", Token: []byte(raw)})
+	if err != nil {
 		t.Fatalf("Authenticate returned error: %v", err)
+	}
+	if err := authentication.ValidatePrincipal(principal, now); err != nil {
+		t.Fatalf("returned principal violates authTime invariant: %v", err)
 	}
 }
 
@@ -145,8 +149,12 @@ func TestVerifierHonorsClockSkewForMappedPrincipalIssuedAt(t *testing.T) {
 		ClockSkew: 30 * time.Second,
 	})
 
-	if _, err := v.Authenticate(context.Background(), authentication.Credential{Kind: "jwt", Token: []byte(raw)}); err != nil {
+	principal, err := v.Authenticate(context.Background(), authentication.Credential{Kind: "jwt", Token: []byte(raw)})
+	if err != nil {
 		t.Fatalf("Authenticate returned error: %v", err)
+	}
+	if err := authentication.ValidatePrincipal(principal, now); err != nil {
+		t.Fatalf("returned principal violates authTime invariant: %v", err)
 	}
 }
 
