@@ -58,6 +58,9 @@ func NewVerifier(options Options) (*Verifier, error) {
 	if invalidText(options.Issuer) || len(options.Audiences) == 0 || len(options.Algorithms) == 0 || options.Keys == nil {
 		return nil, authentication.ErrInvalidCredential
 	}
+	if options.MaxLifetime <= 0 {
+		return nil, authentication.ErrInvalidCredential
+	}
 	if hasDuplicates(options.Audiences) || hasDuplicates(options.Algorithms) {
 		return nil, authentication.ErrInvalidCredential
 	}
@@ -102,6 +105,7 @@ func (v *Verifier) Authenticate(ctx context.Context, credential authentication.C
 		return authentication.Principal{}, authentication.ErrUnauthenticated
 	}
 
+	authTime := v.clock().UTC()
 	claims := jwt.MapClaims{}
 	options := []jwt.ParserOption{
 		jwt.WithValidMethods(v.algorithms),
@@ -109,7 +113,7 @@ func (v *Verifier) Authenticate(ctx context.Context, credential authentication.C
 		jwt.WithLeeway(v.clockSkew),
 		jwt.WithIssuedAt(),
 		jwt.WithExpirationRequired(),
-		jwt.WithTimeFunc(func() time.Time { return v.clock().UTC() }),
+		jwt.WithTimeFunc(func() time.Time { return authTime }),
 	}
 	options = append(options, jwt.WithAudience(v.audiences...))
 
@@ -135,7 +139,7 @@ func (v *Verifier) Authenticate(ctx context.Context, credential authentication.C
 	if err != nil {
 		return authentication.Principal{}, authentication.ErrUnauthenticated
 	}
-	if err := authentication.ValidatePrincipal(principal, v.clock().UTC()); err != nil {
+	if err := validatePrincipalWithSkew(principal, authTime, v.clockSkew); err != nil {
 		return authentication.Principal{}, authentication.ErrUnauthenticated
 	}
 	return principal.Clone(), nil
@@ -153,6 +157,9 @@ func validatedKeyID(token *jwt.Token) (string, error) {
 }
 
 func validClaims(claims jwt.MapClaims, maxLifetime time.Duration) bool {
+	if maxLifetime <= 0 {
+		return false
+	}
 	issuer, err := claims.GetIssuer()
 	if err != nil || invalidText(issuer) {
 		return false
@@ -183,6 +190,30 @@ func validClaims(claims jwt.MapClaims, maxLifetime time.Duration) bool {
 		return false
 	}
 	return true
+}
+
+func validatePrincipalWithSkew(principal authentication.Principal, authTime time.Time, skew time.Duration) error {
+	if err := authentication.ValidatePrincipal(principal, authTime); err == nil {
+		return nil
+	}
+	if skew <= 0 {
+		return authentication.ErrInvalidPrincipal
+	}
+	if principal.AuthenticatedAt.After(authTime.Add(skew)) {
+		return authentication.ErrInvalidPrincipal
+	}
+	if !authTime.Before(principal.ExpiresAt.Add(skew)) {
+		return authentication.ErrInvalidPrincipal
+	}
+
+	validationTime := authTime
+	if principal.AuthenticatedAt.After(validationTime) {
+		validationTime = principal.AuthenticatedAt
+	}
+	if !validationTime.Before(principal.ExpiresAt) {
+		validationTime = principal.ExpiresAt.Add(-time.Nanosecond)
+	}
+	return authentication.ValidatePrincipal(principal, validationTime)
 }
 
 func defaultClaimsMapper(_ context.Context, claims jwt.MapClaims) (authentication.Principal, error) {
