@@ -89,6 +89,67 @@ func TestVerifierAcceptsValidRS256Token(t *testing.T) {
 	}
 }
 
+func TestNewVerifierRejectsNonPositiveMaxLifetime(t *testing.T) {
+	_, err := authjwt.NewVerifier(authjwt.Options{
+		Issuer:      "issuer",
+		Audiences:   []string{"api"},
+		Algorithms:  []string{"EdDSA"},
+		Keys:        &staticKey{key: ed25519.PublicKey{}},
+		MaxLifetime: 0,
+	})
+	if err != authentication.ErrInvalidCredential {
+		t.Fatalf("got %v, want ErrInvalidCredential", err)
+	}
+}
+
+func TestVerifierHonorsClockSkewForMappedPrincipalExpiration(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := signToken(t, jwt.SigningMethodEdDSA, priv, "k1", jwt.MapClaims{
+		"iss": "issuer",
+		"sub": "user",
+		"aud": []string{"api"},
+		"iat": now.Add(-time.Minute).Unix(),
+		"exp": now.Add(-10 * time.Second).Unix(),
+	})
+	v := newTestVerifier(t, authjwt.Options{
+		Keys:      &staticKey{key: pub},
+		Clock:     func() time.Time { return now },
+		ClockSkew: 30 * time.Second,
+	})
+
+	if _, err := v.Authenticate(context.Background(), authentication.Credential{Kind: "jwt", Token: []byte(raw)}); err != nil {
+		t.Fatalf("Authenticate returned error: %v", err)
+	}
+}
+
+func TestVerifierHonorsClockSkewForMappedPrincipalIssuedAt(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := signToken(t, jwt.SigningMethodEdDSA, priv, "k1", jwt.MapClaims{
+		"iss": "issuer",
+		"sub": "user",
+		"aud": []string{"api"},
+		"iat": now.Add(10 * time.Second).Unix(),
+		"exp": now.Add(time.Minute).Unix(),
+	})
+	v := newTestVerifier(t, authjwt.Options{
+		Keys:      &staticKey{key: pub},
+		Clock:     func() time.Time { return now },
+		ClockSkew: 30 * time.Second,
+	})
+
+	if _, err := v.Authenticate(context.Background(), authentication.Credential{Kind: "jwt", Token: []byte(raw)}); err != nil {
+		t.Fatalf("Authenticate returned error: %v", err)
+	}
+}
+
 func TestVerifierRejectsUnconfiguredAlgorithm(t *testing.T) {
 	now := time.Unix(100, 0).UTC()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
