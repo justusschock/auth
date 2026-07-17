@@ -63,6 +63,29 @@ func TestCacheRejectsMismatchedIssuerAndInsecureEndpoints(t *testing.T) {
 	}
 }
 
+func TestCacheReloadsInvalidCachedDocument(t *testing.T) {
+	valid := authmetadata.Document{
+		Issuer: "https://id.example", AuthURL: "https://id.example/authorize", TokenURL: "https://id.example/token", JWKSURL: "https://id.example/keys",
+	}
+	backing := &recordingCache{
+		value: authmetadata.Document{
+			Issuer: "https://other.example", AuthURL: "https://id.example/authorize", TokenURL: "https://id.example/token", JWKSURL: "https://id.example/keys",
+		},
+		found: true,
+	}
+	c := authmetadata.NewCache(backing, authmetadata.LoaderFunc(func(context.Context, string) (authmetadata.Document, error) {
+		return valid, nil
+	}), time.Minute)
+
+	got, err := c.Get(context.Background(), "https://id.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Issuer != valid.Issuer || backing.sets != 1 {
+		t.Fatalf("document=%#v sets=%d", got, backing.sets)
+	}
+}
+
 type recordingCache struct {
 	value  authmetadata.Document
 	found  bool

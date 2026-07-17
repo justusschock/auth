@@ -30,7 +30,7 @@ func TestBeginStoresHashedStateNonceAndPKCE(t *testing.T) {
 		RedirectURIs: []string{"https://app.example/callback"},
 		State:        store,
 		Clock:        func() time.Time { return now },
-		Random:       bytes.NewReader(bytes.Repeat([]byte{1}, 96)),
+		Random:       deterministicSecrets(1, 2, 3),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +80,7 @@ func TestBeginRequiresExactRegisteredHTTPSRedirect(t *testing.T) {
 		ClientID:     "client",
 		RedirectURIs: []string{"https://app.example/callback"},
 		State:        authoidc.NewMemoryStateStore(),
-		Random:       bytes.NewReader(bytes.Repeat([]byte{2}, 96)),
+		Random:       deterministicSecrets(4, 5, 6),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -134,7 +134,7 @@ func TestCompleteConsumesBeforeExchangeAndAllowsOnlyOneCallback(t *testing.T) {
 		RedirectURIs: []string{"https://app.example/callback"},
 		State:        store,
 		Clock:        func() time.Time { return now },
-		Random:       bytes.NewReader(bytes.Repeat([]byte{3}, 96)),
+		Random:       deterministicSecrets(7, 8, 9),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -294,6 +294,14 @@ func writeToken(w http.ResponseWriter, idToken string) {
 		"token_type":   "Bearer",
 		"id_token":     idToken,
 	})
+}
+
+func deterministicSecrets(values ...byte) *bytes.Reader {
+	data := make([]byte, 0, len(values)*32)
+	for _, value := range values {
+		data = append(data, bytes.Repeat([]byte{value}, 32)...)
+	}
+	return bytes.NewReader(data)
 }
 
 func TestStateDigestUsesSHA256LookupOnly(t *testing.T) {

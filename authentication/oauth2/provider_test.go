@@ -27,7 +27,7 @@ func TestBeginUsesPKCEAndDoesNotForceOpenID(t *testing.T) {
 		},
 		RedirectURIs: []string{"https://app.example/oauth/callback"},
 		State:        store,
-		Random:       bytes.NewReader(bytes.Repeat([]byte{4}, 96)),
+		Random:       deterministicSecrets(4, 5, 6),
 		Mapper: func(context.Context, *oauth2.Token) (authentication.Principal, error) {
 			return authentication.Principal{}, nil
 		},
@@ -81,7 +81,7 @@ func TestCompleteUsesRequiredMapperAsOnlyIdentitySource(t *testing.T) {
 		RedirectURIs: []string{"https://app.example/oauth/callback"},
 		State:        store,
 		Clock:        func() time.Time { return now },
-		Random:       bytes.NewReader(bytes.Repeat([]byte{5}, 96)),
+		Random:       deterministicSecrets(7, 8, 9),
 		Mapper: func(_ context.Context, token *oauth2.Token) (authentication.Principal, error) {
 			mapped = true
 			if token.AccessToken == "" {
@@ -115,6 +115,14 @@ func TestCompleteUsesRequiredMapperAsOnlyIdentitySource(t *testing.T) {
 	if _, err := p.Complete(context.Background(), authentication.Callback{StateID: redirect.StateID, Code: "code"}); !errors.Is(err, authentication.ErrReplay) {
 		t.Fatalf("second Complete error = %v, want ErrReplay", err)
 	}
+}
+
+func deterministicSecrets(values ...byte) *bytes.Reader {
+	data := make([]byte, 0, len(values)*32)
+	for _, value := range values {
+		data = append(data, bytes.Repeat([]byte{value}, 32)...)
+	}
+	return bytes.NewReader(data)
 }
 
 func TestNewRequiresOAuth2Mapper(t *testing.T) {
