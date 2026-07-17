@@ -139,10 +139,11 @@ func (v *Verifier) Authenticate(ctx context.Context, credential authentication.C
 	if err != nil {
 		return authentication.Principal{}, authentication.ErrUnauthenticated
 	}
-	if err := validatePrincipalWithSkew(principal, authTime, v.clockSkew); err != nil {
+	principal, err = principalWithEffectiveSkew(principal, authTime, v.clockSkew)
+	if err != nil {
 		return authentication.Principal{}, authentication.ErrUnauthenticated
 	}
-	return principal.Clone(), nil
+	return principal, nil
 }
 
 func validatedKeyID(token *jwt.Token) (string, error) {
@@ -214,6 +215,23 @@ func validatePrincipalWithSkew(principal authentication.Principal, authTime time
 		validationTime = principal.ExpiresAt.Add(-time.Nanosecond)
 	}
 	return authentication.ValidatePrincipal(principal, validationTime)
+}
+
+func principalWithEffectiveSkew(principal authentication.Principal, authTime time.Time, skew time.Duration) (authentication.Principal, error) {
+	if err := validatePrincipalWithSkew(principal, authTime, skew); err != nil {
+		return authentication.Principal{}, err
+	}
+	clone := principal.Clone()
+	if clone.AuthenticatedAt.After(authTime) {
+		clone.AuthenticatedAt = authTime
+	}
+	if !authTime.Before(clone.ExpiresAt) {
+		clone.ExpiresAt = authTime.Add(time.Nanosecond)
+	}
+	if err := authentication.ValidatePrincipal(clone, authTime); err != nil {
+		return authentication.Principal{}, err
+	}
+	return clone, nil
 }
 
 func defaultClaimsMapper(_ context.Context, claims jwt.MapClaims) (authentication.Principal, error) {
