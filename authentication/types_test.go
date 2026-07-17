@@ -27,27 +27,30 @@ func TestValidatePrincipalRequiresIdentityAndCurrentUTCLifetime(t *testing.T) {
 		t.Fatalf("ValidatePrincipal(valid) error = %v", err)
 	}
 
-	tests := map[string]func(*authentication.Principal){
-		"missing ID":              func(p *authentication.Principal) { p.ID = "" },
-		"missing issuer":          func(p *authentication.Principal) { p.Issuer = "" },
-		"missing subject":         func(p *authentication.Principal) { p.Subject = "" },
-		"authenticated in future": func(p *authentication.Principal) { p.AuthenticatedAt = now.Add(time.Nanosecond) },
-		"expired at boundary":     func(p *authentication.Principal) { p.ExpiresAt = now },
-		"unordered lifetime":      func(p *authentication.Principal) { p.ExpiresAt = p.AuthenticatedAt },
-		"non UTC authentication": func(p *authentication.Principal) {
+	tests := map[string]struct {
+		mutate func(*authentication.Principal)
+		want   error
+	}{
+		"missing ID":              {func(p *authentication.Principal) { p.ID = "" }, authentication.ErrInvalidPrincipal},
+		"missing issuer":          {func(p *authentication.Principal) { p.Issuer = "" }, authentication.ErrInvalidPrincipal},
+		"missing subject":         {func(p *authentication.Principal) { p.Subject = "" }, authentication.ErrInvalidPrincipal},
+		"authenticated in future": {func(p *authentication.Principal) { p.AuthenticatedAt = now.Add(time.Nanosecond) }, authentication.ErrInvalidPrincipal},
+		"expired at boundary":     {func(p *authentication.Principal) { p.ExpiresAt = now }, authentication.ErrExpired},
+		"unordered lifetime":      {func(p *authentication.Principal) { p.ExpiresAt = p.AuthenticatedAt }, authentication.ErrInvalidPrincipal},
+		"non UTC authentication": {func(p *authentication.Principal) {
 			p.AuthenticatedAt = p.AuthenticatedAt.In(time.FixedZone("offset", 3600))
-		},
-		"non UTC expiry": func(p *authentication.Principal) { p.ExpiresAt = p.ExpiresAt.In(time.FixedZone("offset", 3600)) },
+		}, authentication.ErrInvalidPrincipal},
+		"non UTC expiry": {func(p *authentication.Principal) { p.ExpiresAt = p.ExpiresAt.In(time.FixedZone("offset", 3600)) }, authentication.ErrInvalidPrincipal},
 	}
 
-	for name, mutate := range tests {
-		name, mutate := name, mutate
+	for name, test := range tests {
+		name, test := name, test
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			principal := valid
-			mutate(&principal)
-			if err := authentication.ValidatePrincipal(principal, now); !errors.Is(err, authentication.ErrInvalidPrincipal) {
-				t.Fatalf("ValidatePrincipal() error = %v, want ErrInvalidPrincipal", err)
+			test.mutate(&principal)
+			if err := authentication.ValidatePrincipal(principal, now); !errors.Is(err, test.want) {
+				t.Fatalf("ValidatePrincipal() error = %v, want %v", err, test.want)
 			}
 		})
 	}
