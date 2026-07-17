@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"io"
 	"net"
 	"net/url"
@@ -21,21 +22,56 @@ import (
 
 const defaultStateTTL = 10 * time.Minute
 
+// Secret holds sensitive callback material and redacts it when formatted.
+// Bytes and binary marshaling provide explicit access for provider use and
+// caller-owned durable stores.
+type Secret struct {
+	value string
+}
+
+func NewSecret(value string) Secret {
+	return Secret{value: value}
+}
+
+func (s Secret) Bytes() []byte {
+	return []byte(s.value)
+}
+
+func (s Secret) MarshalBinary() ([]byte, error) {
+	return s.Bytes(), nil
+}
+
+func (s *Secret) UnmarshalBinary(value []byte) error {
+	if s == nil {
+		return authentication.ErrInvalidCredential
+	}
+	s.value = string(value)
+	return nil
+}
+
+func (Secret) String() string {
+	return "[REDACTED]"
+}
+
+func (Secret) GoString() string {
+	return "[REDACTED]"
+}
+
 // Pending is caller-owned callback state. It intentionally stores only a
 // SHA-256 digest of the raw callback state.
 type Pending struct {
 	Digest       [32]byte
 	Provider     string
 	RedirectURI  string
-	Nonce        string
-	PKCEVerifier string
+	Nonce        Secret
+	PKCEVerifier Secret
 	ExpiresAt    time.Time
 }
 
 // StateStore persists callback state and must consume it atomically.
 type StateStore interface {
 	Put(context.Context, Pending) error
-	Consume(context.Context, string) (Pending, error)
+	Consume(context.Context, [32]byte) (Pending, error)
 }
 
 // MemoryStateStore is a process-local StateStore for tests and single-process
@@ -58,15 +94,17 @@ func (s *MemoryStateStore) Put(ctx context.Context, pending Pending) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, exists := s.pending[pending.Digest]; exists {
+		return authentication.ErrReplay
+	}
 	s.pending[pending.Digest] = pending
 	return nil
 }
 
-func (s *MemoryStateStore) Consume(ctx context.Context, state string) (Pending, error) {
+func (s *MemoryStateStore) Consume(ctx context.Context, digest [32]byte) (Pending, error) {
 	if err := ctx.Err(); err != nil {
 		return Pending{}, err
 	}
-	digest := StateDigest(state)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	pending, ok := s.pending[digest]
@@ -113,13 +151,16 @@ func New(options Options) (*Provider, error) {
 	name := strings.ToLower(strings.TrimSpace(options.Name))
 	issuer := strings.TrimSpace(options.Issuer)
 	config := options.Config
-	clientID := strings.TrimSpace(options.ClientID)
+	optionClientID := strings.TrimSpace(options.ClientID)
+	configClientID := strings.TrimSpace(config.ClientID)
+	if optionClientID != "" && configClientID != "" && optionClientID != configClientID {
+		return nil, authentication.ErrInvalidCredential
+	}
+	clientID := optionClientID
 	if clientID == "" {
-		clientID = strings.TrimSpace(config.ClientID)
+		clientID = configClientID
 	}
-	if config.ClientID == "" {
-		config.ClientID = clientID
-	}
+	config.ClientID = clientID
 	if issuer == "" {
 		issuer = issuerFromEndpoint(config.Endpoint.AuthURL)
 	}
@@ -191,12 +232,12 @@ func (p *Provider) Begin(ctx context.Context, request authentication.BeginReques
 		Digest:       StateDigest(state),
 		Provider:     p.name,
 		RedirectURI:  redirectURI,
-		Nonce:        nonce,
-		PKCEVerifier: verifier,
+		Nonce:        NewSecret(nonce),
+		PKCEVerifier: NewSecret(verifier),
 		ExpiresAt:    expiresAt,
 	}
 	if err := p.state.Put(ctx, pending); err != nil {
-		return authentication.Redirect{}, err
+		return authentication.Redirect{}, sanitizeStateStoreError(ctx, err, authentication.ErrInvalidCallback)
 	}
 	config := p.config
 	config.RedirectURL = redirectURI
@@ -213,9 +254,9 @@ func (p *Provider) Complete(ctx context.Context, callback authentication.Callbac
 	if callback.StateID == "" || callback.Code == "" {
 		return authentication.Principal{}, authentication.ErrInvalidCallback
 	}
-	pending, err := p.state.Consume(ctx, callback.StateID)
+	pending, err := p.state.Consume(ctx, StateDigest(callback.StateID))
 	if err != nil {
-		return authentication.Principal{}, err
+		return authentication.Principal{}, sanitizeStateStoreError(ctx, err, authentication.ErrUnauthenticated)
 	}
 	if pending.Provider != p.name || pending.RedirectURI == "" {
 		return authentication.Principal{}, authentication.ErrUnauthenticated
@@ -231,7 +272,7 @@ func (p *Provider) Complete(ctx context.Context, callback authentication.Callbac
 	}
 	config := p.config
 	config.RedirectURL = pending.RedirectURI
-	token, err := config.Exchange(ctx, callback.Code, oauth2.VerifierOption(pending.PKCEVerifier))
+	token, err := config.Exchange(ctx, callback.Code, oauth2.VerifierOption(string(pending.PKCEVerifier.Bytes())))
 	if err != nil {
 		return authentication.Principal{}, authentication.ErrUnauthenticated
 	}
@@ -243,7 +284,7 @@ func (p *Provider) Complete(ctx context.Context, callback authentication.Callbac
 	if err != nil {
 		return authentication.Principal{}, authentication.ErrUnauthenticated
 	}
-	if idToken.Issuer != p.issuer || idToken.Nonce != pending.Nonce || !slices.Contains(idToken.Audience, p.clientID) {
+	if idToken.Issuer != p.issuer || idToken.Nonce != string(pending.Nonce.Bytes()) || !slices.Contains(idToken.Audience, p.clientID) {
 		return authentication.Principal{}, authentication.ErrUnauthenticated
 	}
 	var claims struct {
@@ -274,6 +315,19 @@ func (p *Provider) allowedRedirect(redirectURI string) (string, error) {
 		return "", authentication.ErrInvalidCallback
 	}
 	return redirectURI, nil
+}
+
+func sanitizeStateStoreError(ctx context.Context, err, fallback error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if errors.Is(err, authentication.ErrReplay) {
+		return authentication.ErrReplay
+	}
+	if errors.Is(err, authentication.ErrInvalidCallback) {
+		return authentication.ErrInvalidCallback
+	}
+	return fallback
 }
 
 func randomSecret(reader io.Reader) (string, error) {

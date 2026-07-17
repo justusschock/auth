@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"io"
+	"net"
 	"net/url"
 	"strings"
 	"time"
@@ -103,12 +105,12 @@ func (p *Provider) Begin(ctx context.Context, request authentication.BeginReques
 		Digest:       authoidc.StateDigest(state),
 		Provider:     p.name,
 		RedirectURI:  redirectURI,
-		Nonce:        nonce,
-		PKCEVerifier: verifier,
+		Nonce:        authoidc.NewSecret(nonce),
+		PKCEVerifier: authoidc.NewSecret(verifier),
 		ExpiresAt:    expiresAt,
 	}
 	if err := p.state.Put(ctx, pending); err != nil {
-		return authentication.Redirect{}, err
+		return authentication.Redirect{}, sanitizeStateStoreError(ctx, err, authentication.ErrInvalidCallback)
 	}
 	config := p.config
 	config.RedirectURL = redirectURI
@@ -125,9 +127,9 @@ func (p *Provider) Complete(ctx context.Context, callback authentication.Callbac
 	if callback.StateID == "" || callback.Code == "" {
 		return authentication.Principal{}, authentication.ErrInvalidCallback
 	}
-	pending, err := p.state.Consume(ctx, callback.StateID)
+	pending, err := p.state.Consume(ctx, authoidc.StateDigest(callback.StateID))
 	if err != nil {
-		return authentication.Principal{}, err
+		return authentication.Principal{}, sanitizeStateStoreError(ctx, err, authentication.ErrUnauthenticated)
 	}
 	if pending.Provider != p.name || pending.RedirectURI == "" {
 		return authentication.Principal{}, authentication.ErrUnauthenticated
@@ -140,7 +142,7 @@ func (p *Provider) Complete(ctx context.Context, callback authentication.Callbac
 	}
 	config := p.config
 	config.RedirectURL = pending.RedirectURI
-	token, err := config.Exchange(ctx, callback.Code, xoauth2.VerifierOption(pending.PKCEVerifier))
+	token, err := config.Exchange(ctx, callback.Code, xoauth2.VerifierOption(string(pending.PKCEVerifier.Bytes())))
 	if err != nil {
 		return authentication.Principal{}, authentication.ErrUnauthenticated
 	}
@@ -159,6 +161,19 @@ func (p *Provider) allowedRedirect(redirectURI string) (string, error) {
 		return "", authentication.ErrInvalidCallback
 	}
 	return redirectURI, nil
+}
+
+func sanitizeStateStoreError(ctx context.Context, err, fallback error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if errors.Is(err, authentication.ErrReplay) {
+		return authentication.ErrReplay
+	}
+	if errors.Is(err, authentication.ErrInvalidCallback) {
+		return authentication.ErrInvalidCallback
+	}
+	return fallback
 }
 
 func authoidcRandomSecret(reader io.Reader) (string, error) {
@@ -204,8 +219,7 @@ func authoidcRedirectAllowed(value string) bool {
 	if parsed.Scheme == "https" {
 		return true
 	}
-	host := parsed.Hostname()
-	return parsed.Scheme == "http" && (strings.EqualFold(host, "localhost") || strings.HasPrefix(host, "127."))
+	return parsed.Scheme == "http" && isLoopback(parsed.Hostname())
 }
 
 func isHTTPSURL(value string) bool {
@@ -221,8 +235,15 @@ func validServiceURL(value string) bool {
 	if parsed.Scheme == "https" {
 		return true
 	}
-	host := parsed.Hostname()
-	return parsed.Scheme == "http" && (strings.EqualFold(host, "localhost") || strings.HasPrefix(host, "127."))
+	return parsed.Scheme == "http" && isLoopback(parsed.Hostname())
+}
+
+func isLoopback(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func invalidText(value string) bool {

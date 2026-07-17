@@ -27,7 +27,7 @@ func NewRegistry(registrations []Registration) (*Registry, error) {
 			return nil, authentication.ErrInvalidCredential
 		}
 		name := normalize(registration.Provider.Name())
-		if invalidText(name) {
+		if invalidText(name) || strings.Contains(name, "@") || strings.Contains(name, "/") {
 			return nil, authentication.ErrInvalidCredential
 		}
 		if _, exists := registry.providers[name]; exists {
