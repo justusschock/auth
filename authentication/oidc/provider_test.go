@@ -6,9 +6,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -55,20 +57,22 @@ func TestBeginStoresHashedStateNonceAndPKCE(t *testing.T) {
 		t.Fatalf("scope = %q, want exactly one openid", query.Get("scope"))
 	}
 
-	pending, err := store.Consume(context.Background(), redirect.StateID)
+	pending, err := store.Consume(context.Background(), authoidc.StateDigest(redirect.StateID))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if pending.Provider != "work" || pending.RedirectURI != "https://app.example/callback" {
 		t.Fatalf("pending = %#v", pending)
 	}
-	if pending.Nonce == "" || pending.PKCEVerifier == "" || pending.Nonce == pending.PKCEVerifier || pending.Nonce == redirect.StateID {
+	nonce := string(pending.Nonce.Bytes())
+	verifier := string(pending.PKCEVerifier.Bytes())
+	if nonce == "" || verifier == "" || nonce == verifier || nonce == redirect.StateID {
 		t.Fatalf("state, nonce, and verifier must be independent: %#v", pending)
 	}
 	if pending.Digest == [32]byte{} || bytes.Contains(pending.Digest[:], []byte(redirect.StateID)) {
 		t.Fatalf("pending digest must not store raw state: %#v", pending.Digest)
 	}
-	if _, err := store.Consume(context.Background(), redirect.StateID); !errors.Is(err, authentication.ErrReplay) {
+	if _, err := store.Consume(context.Background(), authoidc.StateDigest(redirect.StateID)); !errors.Is(err, authentication.ErrReplay) {
 		t.Fatalf("second consume error = %v, want ErrReplay", err)
 	}
 }
@@ -143,14 +147,14 @@ func TestCompleteConsumesBeforeExchangeAndAllowsOnlyOneCallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pending, err := store.Consume(context.Background(), redirect.StateID)
+	pending, err := store.Consume(context.Background(), authoidc.StateDigest(redirect.StateID))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Put(context.Background(), pending); err != nil {
 		t.Fatal(err)
 	}
-	nonceByVerifier.Store(pending.PKCEVerifier, pending.Nonce)
+	nonceByVerifier.Store(string(pending.PKCEVerifier.Bytes()), string(pending.Nonce.Bytes()))
 
 	var wg sync.WaitGroup
 	errs := make(chan error, 2)
@@ -236,8 +240,8 @@ func TestCompleteRejectsNonceProviderAndAuthorizedPartyMismatch(t *testing.T) {
 				Digest:       authoidc.StateDigest("state"),
 				Provider:     test.provider,
 				RedirectURI:  "https://app.example/callback",
-				Nonce:        "nonce",
-				PKCEVerifier: "verifier",
+				Nonce:        authoidc.NewSecret("nonce"),
+				PKCEVerifier: authoidc.NewSecret("verifier"),
 				ExpiresAt:    now.Add(time.Minute),
 			}
 			if err := store.Put(context.Background(), pending); err != nil {
@@ -312,5 +316,169 @@ func TestStateDigestUsesSHA256LookupOnly(t *testing.T) {
 	}
 	if escaped := url.QueryEscape(string(digest[:])); strings.Contains(escaped, raw) {
 		t.Fatalf("digest leaks raw state")
+	}
+}
+
+func TestCompletePassesOnlyStateDigestToStore(t *testing.T) {
+	store := &recordingStateStore{consumeErr: authentication.ErrReplay}
+	p := newTestProvider(t, store)
+
+	_, err := p.Complete(context.Background(), authentication.Callback{StateID: "raw-callback-state", Code: "code"})
+	if !errors.Is(err, authentication.ErrReplay) {
+		t.Fatalf("Complete error = %v, want ErrReplay", err)
+	}
+	if want := authoidc.StateDigest("raw-callback-state"); store.consumed != want {
+		t.Fatalf("Consume lookup = %x, want SHA-256 digest %x", store.consumed, want)
+	}
+}
+
+func TestProviderSanitizesStateStoreErrors(t *testing.T) {
+	const raw = "raw-state nonce-secret verifier-secret"
+	t.Run("put", func(t *testing.T) {
+		store := &recordingStateStore{putErr: errors.New(raw)}
+		p := newTestProvider(t, store)
+		_, err := p.Begin(context.Background(), authentication.BeginRequest{RedirectURI: "https://app.example/callback"})
+		assertSanitizedError(t, err, authentication.ErrInvalidCallback, raw)
+	})
+	t.Run("consume", func(t *testing.T) {
+		store := &recordingStateStore{consumeErr: errors.New(raw)}
+		p := newTestProvider(t, store)
+		_, err := p.Complete(context.Background(), authentication.Callback{StateID: "raw-state", Code: "code"})
+		assertSanitizedError(t, err, authentication.ErrUnauthenticated, raw)
+	})
+	t.Run("store context error with live context", func(t *testing.T) {
+		store := &recordingStateStore{consumeErr: context.DeadlineExceeded}
+		p := newTestProvider(t, store)
+		_, err := p.Complete(context.Background(), authentication.Callback{StateID: "raw-state", Code: "code"})
+		assertSanitizedError(t, err, authentication.ErrUnauthenticated, context.DeadlineExceeded.Error())
+	})
+	t.Run("caller cancellation", func(t *testing.T) {
+		store := &recordingStateStore{consumeErr: errors.New(raw)}
+		p := newTestProvider(t, store)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := p.Complete(ctx, authentication.Callback{StateID: "raw-state", Code: "code"})
+		if err != context.Canceled {
+			t.Fatalf("Complete error = %v, want context.Canceled", err)
+		}
+	})
+}
+
+func TestPendingSecretsAreOpaqueRedactingAndPersistable(t *testing.T) {
+	pendingType := reflect.TypeOf(authoidc.Pending{})
+	for _, name := range []string{"Nonce", "PKCEVerifier"} {
+		field, ok := pendingType.FieldByName(name)
+		if !ok {
+			t.Fatalf("Pending.%s is missing", name)
+		}
+		if field.Type.Kind() == reflect.String {
+			t.Fatalf("Pending.%s exposes a raw string", name)
+		}
+	}
+
+	const nonce = "nonce-secret"
+	const verifier = "verifier-secret"
+	pending := authoidc.Pending{
+		Digest:       authoidc.StateDigest("state"),
+		Nonce:        authoidc.NewSecret(nonce),
+		PKCEVerifier: authoidc.NewSecret(verifier),
+	}
+	formatted := fmt.Sprintf("%v %+v %#v", pending, pending, pending)
+	if strings.Contains(formatted, nonce) || strings.Contains(formatted, verifier) {
+		t.Fatalf("formatted Pending leaked secrets: %s", formatted)
+	}
+
+	encoded, err := pending.PKCEVerifier.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored authoidc.Secret
+	if err := restored.UnmarshalBinary(encoded); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(restored.Bytes()); got != verifier {
+		t.Fatalf("restored secret = %q, want %q", got, verifier)
+	}
+	copied := pending
+	if got := string(copied.Nonce.Bytes()); got != nonce {
+		t.Fatalf("copied nonce = %q, want %q", got, nonce)
+	}
+}
+
+func TestNewRejectsConflictingClientIDs(t *testing.T) {
+	_, err := authoidc.New(authoidc.Options{
+		Name:     "work",
+		Issuer:   "https://id.example",
+		ClientID: "outer-client",
+		Config: oauth2.Config{
+			ClientID: "config-client",
+			Endpoint: oauth2.Endpoint{AuthURL: "https://id.example/authorize", TokenURL: "https://id.example/token"},
+		},
+		RedirectURIs: []string{"https://app.example/callback"},
+		State:        authoidc.NewMemoryStateStore(),
+	})
+	if !errors.Is(err, authentication.ErrInvalidCredential) {
+		t.Fatalf("New error = %v, want ErrInvalidCredential", err)
+	}
+}
+
+func TestMemoryStateStorePutIsCreateOnly(t *testing.T) {
+	store := authoidc.NewMemoryStateStore()
+	digest := authoidc.StateDigest("state")
+	first := authoidc.Pending{Digest: digest, Provider: "first"}
+	second := authoidc.Pending{Digest: digest, Provider: "second"}
+	if err := store.Put(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(context.Background(), second); !errors.Is(err, authentication.ErrReplay) {
+		t.Fatalf("duplicate Put error = %v, want ErrReplay", err)
+	}
+	got, err := store.Consume(context.Background(), digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Provider != first.Provider {
+		t.Fatalf("consumed provider = %q, want original %q", got.Provider, first.Provider)
+	}
+}
+
+type recordingStateStore struct {
+	putErr     error
+	consumeErr error
+	consumed   [32]byte
+}
+
+func (s *recordingStateStore) Put(context.Context, authoidc.Pending) error {
+	return s.putErr
+}
+
+func (s *recordingStateStore) Consume(_ context.Context, digest [32]byte) (authoidc.Pending, error) {
+	s.consumed = digest
+	return authoidc.Pending{}, s.consumeErr
+}
+
+func newTestProvider(t *testing.T, store authoidc.StateStore) *authoidc.Provider {
+	t.Helper()
+	p, err := authoidc.New(authoidc.Options{
+		Name:         "work",
+		Issuer:       "https://id.example",
+		ClientID:     "client",
+		RedirectURIs: []string{"https://app.example/callback"},
+		State:        store,
+		Random:       deterministicSecrets(10, 11, 12),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func assertSanitizedError(t *testing.T, got, want error, sensitive string) {
+	t.Helper()
+	if got != want {
+		t.Fatalf("error = %v, want exact sentinel %v", got, want)
+	}
+	if strings.Contains(got.Error(), sensitive) {
+		t.Fatalf("error leaked sensitive text %q: %v", sensitive, got)
 	}
 }

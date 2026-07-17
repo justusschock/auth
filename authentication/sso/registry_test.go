@@ -54,6 +54,15 @@ func TestRegistryRejectsDuplicateProvidersAndDomains(t *testing.T) {
 	}
 }
 
+func TestRegistryRejectsAmbiguousProviderNames(t *testing.T) {
+	for _, name := range []string{"alice@example.com", "path/provider"} {
+		_, err := sso.NewRegistry([]sso.Registration{{Provider: fakeProvider{name: name}}})
+		if !errors.Is(err, authentication.ErrInvalidCredential) {
+			t.Fatalf("NewRegistry provider %q error = %v, want ErrInvalidCredential", name, err)
+		}
+	}
+}
+
 type fakeProvider struct {
 	name string
 }
