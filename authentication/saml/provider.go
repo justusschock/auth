@@ -16,8 +16,11 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/beevik/etree"
 	crewjamsaml "github.com/crewjam/saml"
 	"github.com/justusschock/go-auth/authentication"
+	xrv "github.com/mattermost/xml-roundtrip-validator"
+	dsig "github.com/russellhaering/goxmldsig"
 )
 
 const (
@@ -25,6 +28,9 @@ const (
 	defaultAllowedClockSkew  = 2 * time.Minute
 	defaultMaxResponseBytes  = 1 << 20
 	maxProtocolTextBytes     = 4096
+	maxRelayStateBytes       = 80
+	maxXMLDepth              = 32
+	maxXMLElements           = 256
 	rsaSHA256SignatureMethod = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"
 
 	samlAssertionNamespace = "urn:oasis:names:tc:SAML:2.0:assertion"
@@ -62,7 +68,7 @@ func (s *MemoryRequestStore) Put(ctx context.Context, request Request) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if !validProtocolText(request.ID) || !validProtocolText(request.RelayState) ||
+	if !validProtocolText(request.ID) || !validRelayState(request.RelayState) ||
 		!validProtocolText(request.ACSURL) || request.ExpiresAt.IsZero() || request.ExpiresAt.Location() != time.UTC {
 		return authentication.ErrInvalidCallback
 	}
@@ -121,6 +127,7 @@ type Provider struct {
 	acsURL           string
 	idpEntityID      string
 	serviceProvider  crewjamsaml.ServiceProvider
+	idpSigningCerts  []*x509.Certificate
 	requestStore     RequestStore
 	clock            func() time.Time
 	maxResponseBytes int
@@ -151,7 +158,11 @@ func New(options Options) (*Provider, error) {
 		!validSPKeyPair(options.Key, options.Certificate, now) {
 		return nil, authentication.ErrInvalidCredential
 	}
-	metadata, idpSSOURL, ok := cloneAndValidateIDPMetadata(options.IDPMetadata, now)
+	key, certificate, ok := cloneSigningCredentials(options.Key, options.Certificate)
+	if !ok || !validSPKeyPair(key, certificate, now) {
+		return nil, authentication.ErrInvalidCredential
+	}
+	metadata, idpSSOURL, idpSigningCerts, ok := cloneAndValidateIDPMetadata(options.IDPMetadata, now)
 	if !ok {
 		return nil, authentication.ErrInvalidCredential
 	}
@@ -164,8 +175,8 @@ func New(options Options) (*Provider, error) {
 	acsURL := cloneURL(options.ACSURL)
 	serviceProvider := crewjamsaml.ServiceProvider{
 		EntityID:          entityID,
-		Key:               options.Key,
-		Certificate:       options.Certificate,
+		Key:               key,
+		Certificate:       certificate,
 		MetadataURL:       *metadataURL,
 		AcsURL:            *acsURL,
 		IDPMetadata:       metadata,
@@ -181,6 +192,7 @@ func New(options Options) (*Provider, error) {
 		acsURL:           acsURL.String(),
 		idpEntityID:      metadata.EntityID,
 		serviceProvider:  serviceProvider,
+		idpSigningCerts:  idpSigningCerts,
 		requestStore:     options.RequestStore,
 		clock:            clock,
 		maxResponseBytes: maxResponseBytes,
@@ -229,7 +241,7 @@ func (p *Provider) Complete(ctx context.Context, callback authentication.Callbac
 	if err := ctx.Err(); err != nil {
 		return authentication.Principal{}, err
 	}
-	if !validProtocolText(callback.StateID) || !validProtocolText(callback.RelayState) || callback.SAMLResponse == "" || callback.Code != "" {
+	if !validProtocolText(callback.StateID) || !validRelayState(callback.RelayState) || callback.SAMLResponse == "" || callback.Code != "" {
 		return authentication.Principal{}, authentication.ErrInvalidCallback
 	}
 	if len(callback.SAMLResponse) > base64.StdEncoding.EncodedLen(p.maxResponseBytes) {
@@ -244,7 +256,8 @@ func (p *Provider) Complete(ctx context.Context, callback authentication.Callbac
 		return authentication.Principal{}, sanitizeStoreError(ctx, err, authentication.ErrUnauthenticated)
 	}
 	now := p.clock().UTC()
-	if pending.ID != callback.StateID || pending.RelayState != callback.RelayState || pending.ACSURL != p.acsURL {
+	if !validProtocolText(pending.ID) || !validRelayState(pending.RelayState) || !validProtocolText(pending.ACSURL) ||
+		pending.ID != callback.StateID || pending.RelayState != callback.RelayState || pending.ACSURL != p.acsURL {
 		return authentication.Principal{}, authentication.ErrUnauthenticated
 	}
 	if pending.ExpiresAt.IsZero() || !now.Before(pending.ExpiresAt) {
@@ -253,7 +266,7 @@ func (p *Provider) Complete(ctx context.Context, callback authentication.Callbac
 	if err := validateResponseStructure(responseXML); err != nil {
 		return authentication.Principal{}, authentication.ErrUnauthenticated
 	}
-	assertion, err := p.serviceProvider.ParseXMLResponse(responseXML, []string{pending.ID}, p.serviceProvider.AcsURL)
+	assertion, err := p.parseVerifiedAssertion(responseXML, now)
 	if err != nil {
 		return authentication.Principal{}, authentication.ErrUnauthenticated
 	}
@@ -288,6 +301,11 @@ type responseHeader struct {
 	Issuer       *struct {
 		Value string `xml:",chardata"`
 	} `xml:"urn:oasis:names:tc:SAML:2.0:assertion Issuer"`
+	Status struct {
+		StatusCode struct {
+			Value string `xml:",attr"`
+		} `xml:"urn:oasis:names:tc:SAML:2.0:protocol StatusCode"`
+	} `xml:"urn:oasis:names:tc:SAML:2.0:protocol Status"`
 }
 
 func parseResponseHeader(value []byte) (responseHeader, error) {
@@ -302,7 +320,8 @@ func (p *Provider) validateResponse(response responseHeader, pending Request, no
 	issueInstant, err := time.Parse(time.RFC3339Nano, response.IssueInstant)
 	if err != nil || response.XMLName.Space != samlProtocolNamespace || response.XMLName.Local != "Response" ||
 		!validProtocolText(response.ID) || response.Version != "2.0" || response.InResponseTo != pending.ID ||
-		response.Destination != p.acsURL || response.Issuer == nil || response.Issuer.Value != p.idpEntityID {
+		response.Destination != p.acsURL || response.Issuer == nil || response.Issuer.Value != p.idpEntityID ||
+		response.Status.StatusCode.Value != crewjamsaml.StatusSuccess {
 		return false
 	}
 	return validIssueInstant(issueInstant, now, p.allowedClockSkew)
@@ -320,7 +339,7 @@ func (p *Provider) validatedClaims(assertion *crewjamsaml.Assertion, pending Req
 	if confirmation.Method != bearerConfirmation || confirmationData == nil ||
 		confirmationData.InResponseTo != pending.ID || confirmationData.Recipient != p.acsURL ||
 		confirmationData.NotOnOrAfter.IsZero() || !now.Before(confirmationData.NotOnOrAfter.Add(p.allowedClockSkew)) ||
-		(!confirmationData.NotBefore.IsZero() && confirmationData.NotBefore.After(now.Add(p.allowedClockSkew))) {
+		!confirmationData.NotBefore.IsZero() {
 		return Claims{}, false
 	}
 	conditions := assertion.Conditions
@@ -381,6 +400,7 @@ func (p *Provider) validatedClaims(assertion *crewjamsaml.Assertion, pending Req
 func validateResponseStructure(value []byte) error {
 	decoder := xml.NewDecoder(bytes.NewReader(value))
 	depth := 0
+	elements := 0
 	responses := 0
 	assertions := 0
 	directAssertions := 0
@@ -398,6 +418,10 @@ func validateResponseStructure(value []byte) error {
 		switch current := token.(type) {
 		case xml.StartElement:
 			depth++
+			elements++
+			if depth > maxXMLDepth || elements > maxXMLElements {
+				return authentication.ErrUnauthenticated
+			}
 			if depth == 1 && (current.Name.Space != samlProtocolNamespace || current.Name.Local != "Response") {
 				return authentication.ErrUnauthenticated
 			}
@@ -439,14 +463,96 @@ func validateResponseStructure(value []byte) error {
 	return nil
 }
 
-func cloneAndValidateIDPMetadata(metadata *crewjamsaml.EntityDescriptor, now time.Time) (*crewjamsaml.EntityDescriptor, string, bool) {
+// parseVerifiedAssertion keeps response time policy per provider. Crewjam's
+// high-level parser applies process-global clock and skew values, so this uses
+// its underlying round-trip and XMLDSIG dependencies directly.
+func (p *Provider) parseVerifiedAssertion(value []byte, now time.Time) (*crewjamsaml.Assertion, error) {
+	if err := xrv.Validate(bytes.NewReader(value)); err != nil {
+		return nil, err
+	}
+	document := etree.NewDocument()
+	if err := document.ReadFromBytes(value); err != nil || document.Root() == nil {
+		return nil, authentication.ErrUnauthenticated
+	}
+
+	responseElement := document.Root()
+	assertionElement, ok := directAssertion(responseElement)
+	if !ok {
+		return nil, authentication.ErrUnauthenticated
+	}
+	certificateStore := dsig.MemoryX509CertificateStore{Roots: append([]*x509.Certificate(nil), p.idpSigningCerts...)}
+	validationContext := dsig.NewDefaultValidationContext(&certificateStore)
+	validationContext.IdAttribute = "ID"
+	validationContext.Clock = dsig.NewFakeClockAt(now)
+
+	verifiedResponse, err := validationContext.Validate(responseElement)
+	if err == nil {
+		assertionElement, ok = directAssertion(verifiedResponse)
+		if !ok {
+			return nil, authentication.ErrUnauthenticated
+		}
+	} else {
+		if !errors.Is(err, dsig.ErrMissingSignature) {
+			return nil, err
+		}
+		assertionElement, err = validationContext.Validate(assertionElement)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	assertionXML, err := elementBytes(assertionElement)
+	if err != nil {
+		return nil, err
+	}
+	var assertion crewjamsaml.Assertion
+	if err := xml.Unmarshal(assertionXML, &assertion); err != nil {
+		return nil, err
+	}
+	return &assertion, nil
+}
+
+func directAssertion(response *etree.Element) (*etree.Element, bool) {
+	var assertion *etree.Element
+	for _, child := range response.ChildElements() {
+		if child.NamespaceURI() != samlAssertionNamespace || child.Tag != "Assertion" {
+			continue
+		}
+		if assertion != nil {
+			return nil, false
+		}
+		assertion = child
+	}
+	return assertion, assertion != nil
+}
+
+func elementBytes(element *etree.Element) ([]byte, error) {
+	namespaces := make(map[string]string)
+	for _, child := range element.FindElements("//*") {
+		if namespace := child.NamespaceURI(); namespace != "" {
+			namespaces[child.Space] = namespace
+		}
+	}
+	document := etree.NewDocument()
+	document.SetRoot(element.Copy())
+	for space, namespace := range namespaces {
+		name := "xmlns"
+		if space != "" {
+			name += ":" + space
+		}
+		document.Root().CreateAttr(name, namespace)
+	}
+	return document.WriteToBytes()
+}
+
+func cloneAndValidateIDPMetadata(metadata *crewjamsaml.EntityDescriptor, now time.Time) (*crewjamsaml.EntityDescriptor, string, []*x509.Certificate, bool) {
 	if metadata == nil || !validHTTPSString(metadata.EntityID) ||
 		(!metadata.ValidUntil.IsZero() && !now.Before(metadata.ValidUntil)) {
-		return nil, "", false
+		return nil, "", nil, false
 	}
 	clone := &crewjamsaml.EntityDescriptor{EntityID: metadata.EntityID, ValidUntil: metadata.ValidUntil}
 	redirectLocation := ""
-	certificateCount := 0
+	var signingCertificates []*x509.Certificate
 	for _, descriptor := range metadata.IDPSSODescriptors {
 		clonedDescriptor := crewjamsaml.IDPSSODescriptor{
 			SSODescriptor: crewjamsaml.SSODescriptor{RoleDescriptor: crewjamsaml.RoleDescriptor{
@@ -458,14 +564,14 @@ func cloneAndValidateIDPMetadata(metadata *crewjamsaml.EntityDescriptor, now tim
 			for _, encodedCertificate := range key.KeyInfo.X509Data.X509Certificates {
 				certificateData, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(encodedCertificate.Data), ""))
 				if err != nil {
-					return nil, "", false
+					return nil, "", nil, false
 				}
 				certificate, err := x509.ParseCertificate(certificateData)
 				if err != nil || now.Before(certificate.NotBefore) || now.After(certificate.NotAfter) {
-					return nil, "", false
+					return nil, "", nil, false
 				}
 				if key.Use == "" || key.Use == "signing" {
-					certificateCount++
+					signingCertificates = append(signingCertificates, certificate)
 				}
 				clonedKey.KeyInfo.X509Data.X509Certificates = append(
 					clonedKey.KeyInfo.X509Data.X509Certificates,
@@ -477,7 +583,7 @@ func cloneAndValidateIDPMetadata(metadata *crewjamsaml.EntityDescriptor, now tim
 		for _, endpoint := range descriptor.SingleSignOnServices {
 			if endpoint.Binding == crewjamsaml.HTTPRedirectBinding {
 				if redirectLocation != "" || !validHTTPSString(endpoint.Location) {
-					return nil, "", false
+					return nil, "", nil, false
 				}
 				redirectLocation = endpoint.Location
 			}
@@ -485,14 +591,30 @@ func cloneAndValidateIDPMetadata(metadata *crewjamsaml.EntityDescriptor, now tim
 		}
 		clone.IDPSSODescriptors = append(clone.IDPSSODescriptors, clonedDescriptor)
 	}
-	if redirectLocation == "" || certificateCount == 0 {
-		return nil, "", false
+	if redirectLocation == "" || len(signingCertificates) == 0 {
+		return nil, "", nil, false
 	}
-	return clone, redirectLocation, true
+	return clone, redirectLocation, signingCertificates, true
+}
+
+func cloneSigningCredentials(key *rsa.PrivateKey, certificate *x509.Certificate) (*rsa.PrivateKey, *x509.Certificate, bool) {
+	if key == nil || certificate == nil || len(certificate.Raw) == 0 {
+		return nil, nil, false
+	}
+	clonedKey, err := x509.ParsePKCS1PrivateKey(x509.MarshalPKCS1PrivateKey(key))
+	if err != nil {
+		return nil, nil, false
+	}
+	clonedCertificate, err := x509.ParseCertificate(append([]byte(nil), certificate.Raw...))
+	if err != nil {
+		return nil, nil, false
+	}
+	return clonedKey, clonedCertificate, true
 }
 
 func validSPKeyPair(key *rsa.PrivateKey, certificate *x509.Certificate, now time.Time) bool {
-	if key == nil || certificate == nil || key.N == nil || key.N.BitLen() < 2048 || now.Before(certificate.NotBefore) || now.After(certificate.NotAfter) {
+	if key == nil || certificate == nil || key.N == nil || key.N.BitLen() < 2048 || key.Validate() != nil ||
+		now.Before(certificate.NotBefore) || now.After(certificate.NotAfter) {
 		return false
 	}
 	publicKey, ok := certificate.PublicKey.(*rsa.PublicKey)
@@ -581,6 +703,10 @@ func cloneURL(value *url.URL) *url.URL {
 
 func validProtocolText(value string) bool {
 	return value != "" && validProtocolValue(value)
+}
+
+func validRelayState(value string) bool {
+	return value != "" && len(value) <= maxRelayStateBytes && utf8.ValidString(value) && strings.IndexByte(value, 0) < 0
 }
 
 func validProtocolValue(value string) bool {
