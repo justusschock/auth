@@ -13,6 +13,10 @@ func (s staticPolicies) Policies(context.Context) ([]byte, error) {
 	return append([]byte(nil), s...), nil
 }
 
+type borrowedPolicies []byte
+
+func (s borrowedPolicies) Policies(context.Context) ([]byte, error) { return s, nil }
+
 type staticEntities []byte
 
 func (s staticEntities) Entities(context.Context, authorization.Request) ([]byte, error) {

@@ -103,7 +103,7 @@ func TestEngineRejectsInvalidConstructionSourcesAndEntities(t *testing.T) {
 }
 
 func TestEngineRejectsOversizedSourcesBeforeCopying(t *testing.T) {
-	oversized := staticPolicies(strings.Repeat(" ", 1<<20+1))
+	oversized := borrowedPolicies(strings.Repeat(" ", 1<<20+1))
 	engine := newEngine(t, oversized, emptyEntities{})
 	failed := newEngine(t, failingPolicies{errBackendDetail}, emptyEntities{})
 	request := request("read", map[string]any{"blocked": false})
