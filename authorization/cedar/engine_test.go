@@ -102,6 +102,46 @@ func TestEngineRejectsInvalidConstructionSourcesAndEntities(t *testing.T) {
 	}
 }
 
+func TestEngineRejectsOversizedSourcesBeforeCopying(t *testing.T) {
+	oversized := staticPolicies(strings.Repeat(" ", 1<<20+1))
+	engine := newEngine(t, oversized, emptyEntities{})
+	failed := newEngine(t, failingPolicies{errBackendDetail}, emptyEntities{})
+	request := request("read", map[string]any{"blocked": false})
+	allocations := testing.AllocsPerRun(10, func() {
+		decision, err := engine.Authorize(context.Background(), request)
+		if !errors.Is(err, authorization.ErrInvalidSource) || decision.Allowed {
+			t.Fatalf("Authorize() = %#v, %v", decision, err)
+		}
+	})
+	baseline := testing.AllocsPerRun(10, func() {
+		_, _ = failed.Authorize(context.Background(), request)
+	})
+	if allocations > baseline {
+		t.Fatalf("oversized source allocated %.1f times versus %.1f source-error baseline", allocations, baseline)
+	}
+}
+
+func TestEngineRejectsDuplicateAndInvalidEntityUIDs(t *testing.T) {
+	valid := `{"uid":{"type":"Document","id":"doc-1"},"attrs":{},"parents":[]}`
+	cases := map[string]string{
+		"duplicate UID":       `[` + valid + `,` + valid + `]`,
+		"empty entity type":   `[{"uid":{"type":"","id":"doc-1"},"attrs":{},"parents":[]}]`,
+		"invalid entity type": `[{"uid":{"type":"Bad-Type","id":"doc-1"},"attrs":{},"parents":[]}]`,
+		"oversized entity ID": `[{"uid":{"type":"Document","id":"` + strings.Repeat("x", 257) + `"},"attrs":{},"parents":[]}]`,
+		"invalid parent type": `[{"uid":{"type":"Document","id":"doc-1"},"attrs":{},"parents":[{"type":"Bad-Type","id":"parent"}]}]`,
+		"empty parent ID":     `[{"uid":{"type":"Document","id":"doc-1"},"attrs":{},"parents":[{"type":"Folder","id":""}]}]`,
+	}
+	for name, document := range cases {
+		t.Run(name, func(t *testing.T) {
+			engine := newEngine(t, staticPolicies(`permit(principal, action, resource);`), staticEntities(document))
+			decision, err := engine.Authorize(context.Background(), request("read", nil))
+			if !errors.Is(err, authorization.ErrInvalidSource) || decision.Allowed {
+				t.Fatalf("Authorize() = %#v, %v", decision, err)
+			}
+		})
+	}
+}
+
 func TestEngineValidatesEntityIdentifiers(t *testing.T) {
 	engine := newEngine(t, staticPolicies(basicPolicies), emptyEntities{})
 	valid := request("read", map[string]any{"blocked": false})
@@ -132,9 +172,11 @@ func TestEngineConvertsBoundedContextAndRejectsAmbiguity(t *testing.T) {
 	}
 
 	badValues := []any{
-		math.NaN(), math.Inf(1), float64(1), uint64(math.MaxUint64),
+		math.NaN(), math.Inf(1), float64(1), int(1), int32(1), uint(1), uint64(7), uint64(math.MaxUint64),
 		map[int]any{1: true}, struct{ Secret string }{"x"}, new(int),
 		strings.Repeat("x", 4097),
+		[]any{"a", int64(1)},
+		[]any{map[string]any{"one": true}, map[string]any{"two": true}},
 		deepContext(18),
 		manyContext(1025),
 	}
@@ -143,6 +185,24 @@ func TestEngineConvertsBoundedContextAndRejectsAmbiguity(t *testing.T) {
 		if !errors.Is(err, authorization.ErrInvalidRequest) || decision.Allowed {
 			t.Fatalf("value %T: decision=%#v err=%v", value, decision, err)
 		}
+	}
+}
+
+func TestEngineDeepCopiesRequestBeforeCallingEntitySource(t *testing.T) {
+	contextValues := map[string]any{
+		"nested":  map[string]any{"value": "original"},
+		"list":    []any{map[string]any{"value": "original"}},
+		"strings": []string{"original"},
+	}
+	engine := newEngine(t, staticPolicies(`permit(principal, action, resource);`), mutatingEntities{})
+	decision, err := engine.Authorize(context.Background(), request("read", contextValues))
+	if err != nil || !decision.Allowed {
+		t.Fatalf("Authorize() = %#v, %v", decision, err)
+	}
+	if contextValues["nested"].(map[string]any)["value"] != "original" ||
+		contextValues["list"].([]any)[0].(map[string]any)["value"] != "original" ||
+		contextValues["strings"].([]string)[0] != "original" {
+		t.Fatalf("entity source mutated caller request: %#v", contextValues)
 	}
 }
 

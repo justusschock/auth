@@ -36,3 +36,12 @@ func (s failingEntities) Entities(context.Context, authorization.Request) ([]byt
 }
 
 var errBackendDetail = errors.New("backend secret detail")
+
+type mutatingEntities struct{}
+
+func (mutatingEntities) Entities(_ context.Context, request authorization.Request) ([]byte, error) {
+	request.Context["nested"].(map[string]any)["value"] = "mutated"
+	request.Context["list"].([]any)[0].(map[string]any)["value"] = "mutated"
+	request.Context["strings"].([]string)[0] = "mutated"
+	return []byte("[]"), nil
+}
