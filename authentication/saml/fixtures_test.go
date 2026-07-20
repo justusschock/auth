@@ -42,6 +42,9 @@ type responseOptions struct {
 	signResponse           bool
 	secondAssertion        bool
 	encryptedAssertion     bool
+	nestedAttributeDepth   int
+	extraAttributeElements int
+	responseTime           time.Time
 	responseDestination    string
 	responseIssuer         string
 	responseInResponseTo   string
@@ -51,6 +54,7 @@ type responseOptions struct {
 	conditionsNotOnOrAfter time.Time
 	subjectRecipient       string
 	subjectInResponseTo    string
+	subjectNotBefore       time.Time
 	subjectNotOnOrAfter    time.Time
 	authenticatedAt        time.Time
 }
@@ -160,6 +164,10 @@ func signedFixtureResponse(t testing.TB) string {
 func fixtureResponse(t testing.TB, options responseOptions) string {
 	t.Helper()
 	f := fixtureFor(t)
+	responseTime := options.responseTime
+	if responseTime.IsZero() {
+		responseTime = f.now
+	}
 	if options.responseDestination == "" {
 		options.responseDestination = fixtureACSURL
 	}
@@ -176,10 +184,10 @@ func fixtureResponse(t testing.TB, options responseOptions) string {
 		options.audience = fixtureEntityID
 	}
 	if options.conditionsNotBefore.IsZero() {
-		options.conditionsNotBefore = f.now.Add(-time.Minute)
+		options.conditionsNotBefore = responseTime.Add(-time.Minute)
 	}
 	if options.conditionsNotOnOrAfter.IsZero() {
-		options.conditionsNotOnOrAfter = f.now.Add(5 * time.Minute)
+		options.conditionsNotOnOrAfter = responseTime.Add(5 * time.Minute)
 	}
 	if options.subjectRecipient == "" {
 		options.subjectRecipient = fixtureACSURL
@@ -188,15 +196,15 @@ func fixtureResponse(t testing.TB, options responseOptions) string {
 		options.subjectInResponseTo = fixtureRequestID
 	}
 	if options.subjectNotOnOrAfter.IsZero() {
-		options.subjectNotOnOrAfter = f.now.Add(5 * time.Minute)
+		options.subjectNotOnOrAfter = responseTime.Add(5 * time.Minute)
 	}
 	if options.authenticatedAt.IsZero() {
-		options.authenticatedAt = f.now.Add(-time.Minute)
+		options.authenticatedAt = responseTime.Add(-time.Minute)
 	}
 
 	assertion := &crewjamsaml.Assertion{
 		ID:           "assertion-1",
-		IssueInstant: f.now,
+		IssueInstant: responseTime,
 		Version:      "2.0",
 		Issuer:       crewjamsaml.Issuer{Value: options.assertionIssuer},
 		Subject: &crewjamsaml.Subject{
@@ -206,6 +214,7 @@ func fixtureResponse(t testing.TB, options responseOptions) string {
 				SubjectConfirmationData: &crewjamsaml.SubjectConfirmationData{
 					InResponseTo: options.subjectInResponseTo,
 					Recipient:    options.subjectRecipient,
+					NotBefore:    options.subjectNotBefore,
 					NotOnOrAfter: options.subjectNotOnOrAfter,
 				},
 			}},
@@ -227,6 +236,26 @@ func fixtureResponse(t testing.TB, options responseOptions) string {
 		}}}},
 	}
 	assertionElement := assertion.Element()
+	attributeValue := assertionElement.FindElement(".//AttributeValue")
+	if attributeValue == nil {
+		t.Fatal("fixture assertion has no AttributeValue")
+	}
+	if options.nestedAttributeDepth > 0 {
+		attributeValue.SetText("")
+		parent := attributeValue
+		for range options.nestedAttributeDepth {
+			child := etree.NewElement("deep:value")
+			child.CreateAttr("xmlns:deep", "urn:fixture:deep")
+			parent.AddChild(child)
+			parent = child
+		}
+		parent.SetText("alice@example.com")
+	}
+	for range options.extraAttributeElements {
+		child := etree.NewElement("extra:value")
+		child.CreateAttr("xmlns:extra", "urn:fixture:extra")
+		attributeValue.AddChild(child)
+	}
 	if !options.unsigned && !options.signResponse {
 		assertionElement = signElement(t, f, assertionElement)
 	}
@@ -235,7 +264,7 @@ func fixtureResponse(t testing.TB, options responseOptions) string {
 		ID:           "response-1",
 		InResponseTo: options.responseInResponseTo,
 		Version:      "2.0",
-		IssueInstant: f.now,
+		IssueInstant: responseTime,
 		Destination:  options.responseDestination,
 		Issuer:       &crewjamsaml.Issuer{Value: options.responseIssuer},
 		Status:       crewjamsaml.Status{StatusCode: crewjamsaml.StatusCode{Value: crewjamsaml.StatusSuccess}},

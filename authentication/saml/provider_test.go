@@ -3,6 +3,7 @@ package saml_test
 import (
 	"compress/flate"
 	"context"
+	"crypto/rsa"
 	"encoding/base64"
 	"errors"
 	"io"
@@ -55,6 +56,27 @@ func TestBeginRejectsNonExactACS(t *testing.T) {
 		if _, err := provider.Begin(context.Background(), authentication.BeginRequest{RedirectURI: redirectURI}); !errors.Is(err, authentication.ErrInvalidCallback) {
 			t.Fatalf("Begin(%q) error = %v, want ErrInvalidCallback", redirectURI, err)
 		}
+	}
+}
+
+func TestProviderOwnsServiceProviderCredentials(t *testing.T) {
+	f := fixtureFor(t)
+	options := fixtureOptions(t, authsaml.NewMemoryRequestStore())
+	provider, err := authsaml.New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	options.Key.N.SetInt64(3)
+	options.Certificate.Raw[0] ^= 0xff
+	options.Certificate.PublicKey.(*rsa.PublicKey).N.SetInt64(3)
+
+	redirect, err := provider.Begin(context.Background(), authentication.BeginRequest{RedirectURI: fixtureACSURL})
+	if err != nil {
+		t.Fatalf("Begin() after caller credential mutation: %v", err)
+	}
+	if redirect.URL.Query().Get("Signature") == "" || f.spKey.N.BitLen() != 2 {
+		t.Fatal("test did not mutate caller-owned credentials")
 	}
 }
 
@@ -204,6 +226,88 @@ func TestCompleteRejectsRelayMismatchAndExpiredRequest(t *testing.T) {
 			t.Fatalf("Complete() error = %v, want ErrExpired", err)
 		}
 	})
+}
+
+func TestRelayStateUsesSAMLBindingLimit(t *testing.T) {
+	store := authsaml.NewMemoryRequestStore()
+	request := authsaml.Request{ID: fixtureRequestID, RelayState: strings.Repeat("r", 80), ACSURL: fixtureACSURL, ExpiresAt: future()}
+	if err := store.Put(context.Background(), request); err != nil {
+		t.Fatalf("Put(80-byte RelayState) error = %v", err)
+	}
+	request.ID = "req-2"
+	request.RelayState += "r"
+	if err := store.Put(context.Background(), request); !errors.Is(err, authentication.ErrInvalidCallback) {
+		t.Fatalf("Put(81-byte RelayState) error = %v, want ErrInvalidCallback", err)
+	}
+
+	recording := &recordingRequestStore{}
+	provider := signedFixtureProvider(t, recording)
+	callback := fixtureCallback(signedFixtureResponse(t))
+	callback.RelayState = strings.Repeat("r", 81)
+	if _, err := provider.Complete(context.Background(), callback); !errors.Is(err, authentication.ErrInvalidCallback) {
+		t.Fatalf("Complete(81-byte RelayState) error = %v, want ErrInvalidCallback", err)
+	}
+	if recording.consumeCalls != 0 {
+		t.Fatalf("Consume calls = %d, want 0", recording.consumeCalls)
+	}
+}
+
+func TestCompleteUsesProviderClockWithoutCrewjamTemporalGlobals(t *testing.T) {
+	f := fixtureFor(t)
+	providerNow := f.now.Add(10 * time.Minute)
+	store := authsaml.NewMemoryRequestStore()
+	if err := store.Put(context.Background(), authsaml.Request{
+		ID: fixtureRequestID, RelayState: fixtureRelayState, ACSURL: fixtureACSURL, ExpiresAt: providerNow.Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	options := fixtureOptions(t, store)
+	options.Clock = func() time.Time { return providerNow }
+	provider, err := authsaml.New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := fixtureResponse(t, responseOptions{responseTime: providerNow})
+	if _, err := provider.Complete(context.Background(), fixtureCallback(response)); err != nil {
+		t.Fatalf("Complete() with provider-owned clock error = %v", err)
+	}
+}
+
+func TestCompleteRejectsBearerSubjectConfirmationNotBefore(t *testing.T) {
+	f := fixtureFor(t)
+	store := authsaml.NewMemoryRequestStore()
+	putFixtureRequest(t, store)
+	provider := signedFixtureProvider(t, store)
+	response := fixtureResponse(t, responseOptions{subjectNotBefore: f.now.Add(-time.Second)})
+	if _, err := provider.Complete(context.Background(), fixtureCallback(response)); !errors.Is(err, authentication.ErrUnauthenticated) {
+		t.Fatalf("Complete() error = %v, want ErrUnauthenticated", err)
+	}
+}
+
+func TestCompleteRejectsExcessiveXMLComplexity(t *testing.T) {
+	tests := []struct {
+		name    string
+		options responseOptions
+	}{
+		{name: "depth", options: responseOptions{nestedAttributeDepth: 40}},
+		{name: "elements", options: responseOptions{extraAttributeElements: 200}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := authsaml.NewMemoryRequestStore()
+			putFixtureRequest(t, store)
+			options := fixtureOptions(t, store)
+			options.MaxResponseBytes = 1 << 20
+			provider, err := authsaml.New(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := fixtureResponse(t, test.options)
+			if _, err = provider.Complete(context.Background(), fixtureCallback(response)); !errors.Is(err, authentication.ErrUnauthenticated) {
+				t.Fatalf("Complete() error = %v, want ErrUnauthenticated", err)
+			}
+		})
+	}
 }
 
 func TestCompleteChecksEncodedLimitBeforeDecodeOrStoreAccess(t *testing.T) {
