@@ -10,8 +10,6 @@ import (
 	"testing"
 	"time"
 
-	dsig "github.com/russellhaering/goxmldsig"
-
 	"github.com/justusschock/go-auth/authentication"
 	authsaml "github.com/justusschock/go-auth/authentication/saml"
 )
@@ -25,7 +23,7 @@ func TestBeginBuildsSignedSHA256RequestForExactRegisteredACS(t *testing.T) {
 		t.Fatal(err)
 	}
 	query := redirect.URL.Query()
-	if query.Get("SigAlg") != dsig.RSASHA256SignatureMethod || query.Get("Signature") == "" {
+	if query.Get("SigAlg") != fixtureRSASHA256SignatureMethod || query.Get("Signature") == "" {
 		t.Fatalf("redirect does not contain an RSA-SHA256 signature: %q", redirect.URL.RawQuery)
 	}
 	if redirect.StateID == "" || query.Get("RelayState") == "" || query.Get("RelayState") == redirect.StateID {
@@ -141,24 +139,37 @@ func TestCompleteRejectsMismatchedSignedProtocolFields(t *testing.T) {
 }
 
 func TestCompleteAppliesExplicitClockSkewAndLifetime(t *testing.T) {
-	f := fixtureFor(t)
 	tests := []struct {
 		name    string
-		options responseOptions
+		options func(time.Time) responseOptions
 		wantErr bool
 	}{
-		{name: "within skew", options: responseOptions{conditionsNotBefore: f.now.Add(29 * time.Second)}},
-		{name: "beyond skew", options: responseOptions{conditionsNotBefore: f.now.Add(31 * time.Second)}, wantErr: true},
-		{name: "expired conditions", options: responseOptions{conditionsNotOnOrAfter: f.now.Add(-31 * time.Second)}, wantErr: true},
-		{name: "expired subject confirmation", options: responseOptions{subjectNotOnOrAfter: f.now.Add(-31 * time.Second)}, wantErr: true},
-		{name: "future authentication", options: responseOptions{authenticatedAt: f.now.Add(time.Second)}, wantErr: true},
+		{name: "within skew", options: func(now time.Time) responseOptions {
+			return responseOptions{conditionsNotBefore: now.Add(29 * time.Second)}
+		}},
+		{name: "expired within skew", options: func(now time.Time) responseOptions {
+			return responseOptions{conditionsNotOnOrAfter: now.Add(-29 * time.Second)}
+		}},
+		{name: "beyond skew", options: func(now time.Time) responseOptions {
+			return responseOptions{conditionsNotBefore: now.Add(31 * time.Second)}
+		}, wantErr: true},
+		{name: "expired conditions", options: func(now time.Time) responseOptions {
+			return responseOptions{conditionsNotOnOrAfter: now.Add(-31 * time.Second)}
+		}, wantErr: true},
+		{name: "expired subject confirmation", options: func(now time.Time) responseOptions {
+			return responseOptions{subjectNotOnOrAfter: now.Add(-31 * time.Second)}
+		}, wantErr: true},
+		{name: "future authentication", options: func(now time.Time) responseOptions {
+			return responseOptions{authenticatedAt: now.Add(time.Second)}
+		}, wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			f := fixtureFor(t)
 			store := authsaml.NewMemoryRequestStore()
 			putFixtureRequest(t, store)
 			provider := signedFixtureProvider(t, store)
-			_, err := provider.Complete(context.Background(), fixtureCallback(fixtureResponse(t, test.options)))
+			_, err := provider.Complete(context.Background(), fixtureCallback(fixtureResponse(t, test.options(f.now))))
 			if test.wantErr && !errors.Is(err, authentication.ErrUnauthenticated) {
 				t.Fatalf("Complete() error = %v, want ErrUnauthenticated", err)
 			}

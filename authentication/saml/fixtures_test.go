@@ -15,17 +15,17 @@ import (
 	"github.com/beevik/etree"
 	crewjamsaml "github.com/crewjam/saml"
 	authsaml "github.com/justusschock/go-auth/authentication/saml"
-	dsig "github.com/russellhaering/goxmldsig"
 )
 
 const (
-	fixtureACSURL      = "https://app.example/saml/acs"
-	fixtureEntityID    = "https://sp.example/saml/metadata"
-	fixtureMetadataURL = "https://sp.example/saml/metadata-document"
-	fixtureIDPEntityID = "https://idp.example/saml/metadata"
-	fixtureIDPSSOURL   = "https://idp.example/saml/sso"
-	fixtureRequestID   = "req-1"
-	fixtureRelayState  = "relay"
+	fixtureRSASHA256SignatureMethod = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"
+	fixtureACSURL                   = "https://app.example/saml/acs"
+	fixtureEntityID                 = "https://sp.example/saml/metadata"
+	fixtureMetadataURL              = "https://sp.example/saml/metadata-document"
+	fixtureIDPEntityID              = "https://idp.example/saml/metadata"
+	fixtureIDPSSOURL                = "https://idp.example/saml/sso"
+	fixtureRequestID                = "req-1"
+	fixtureRelayState               = "relay"
 )
 
 type fixture struct {
@@ -262,12 +262,10 @@ func fixtureResponse(t testing.TB, options responseOptions) string {
 
 func signElement(t testing.TB, f *fixture, element *etree.Element) *etree.Element {
 	t.Helper()
-	context, err := dsig.NewSigningContext(f.idpKey, [][]byte{f.idpCert.Raw})
+	context, err := crewjamsaml.GetSigningContext(&crewjamsaml.ServiceProvider{
+		Key: f.idpKey, Certificate: f.idpCert, SignatureMethod: fixtureRSASHA256SignatureMethod,
+	})
 	if err != nil {
-		t.Fatal(err)
-	}
-	context.Canonicalizer = dsig.MakeC14N10ExclusiveCanonicalizerWithPrefixList("")
-	if err := context.SetSignatureMethod(dsig.RSASHA256SignatureMethod); err != nil {
 		t.Fatal(err)
 	}
 	signed, err := context.SignEnveloped(element)
