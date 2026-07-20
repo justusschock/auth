@@ -16,7 +16,7 @@ func TestAuthenticationAndAuthorizationAreIndependent(t *testing.T) {
 	}
 	for _, test := range cases {
 		t.Run(test.packages, func(t *testing.T) {
-			output, err := exec.Command("go", "list", "-deps", test.packages).CombinedOutput()
+			output, err := exec.Command("go", "list", "-deps", "-test", test.packages).CombinedOutput()
 			if err != nil {
 				t.Fatalf("go list: %v: %s", err, output)
 			}
@@ -30,7 +30,7 @@ func TestAuthenticationAndAuthorizationAreIndependent(t *testing.T) {
 }
 
 func TestNoForbiddenDependency(t *testing.T) {
-	output, err := exec.Command("go", "list", "-deps", "./...").CombinedOutput()
+	output, err := exec.Command("go", "list", "-deps", "-test", "./...").CombinedOutput()
 	if err != nil {
 		t.Fatalf("go list: %v: %s", err, output)
 	}
