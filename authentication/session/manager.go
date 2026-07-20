@@ -7,9 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"io"
-	"sync/atomic"
 	"time"
 
 	"github.com/justusschock/go-auth/authentication"
@@ -42,7 +40,6 @@ type Manager struct {
 	lifetime    time.Duration
 	random      io.Reader
 	clock       func() time.Time
-	counter     atomic.Uint64
 }
 
 // NewManager validates options and returns a session manager.
@@ -81,12 +78,16 @@ func (m *Manager) Create(ctx context.Context, principal authentication.Principal
 	if !validClient(client) {
 		return Session{}, "", authentication.ErrInvalidCredential
 	}
+	id, err := m.randomSessionID()
+	if err != nil {
+		return Session{}, "", authentication.ErrInvalidCredential
+	}
 	refresh, err := m.randomToken()
 	if err != nil {
 		return Session{}, "", authentication.ErrInvalidCredential
 	}
 	session := Session{
-		ID:            m.nextSessionID(principal.ID, now),
+		ID:            id,
 		Version:       1,
 		Principal:     principal.Clone(),
 		CreatedAt:     now,
@@ -167,10 +168,11 @@ func (m *Manager) Rotate(ctx context.Context, id string, refresh string) (rotate
 	if err := m.store.CompareAndSwap(ctx, id, session.Version, uint64(lease.Info().Token), next); err != nil {
 		return Session{}, "", sanitize(err)
 	}
-	if err := lease.Release(context.Background()); err != nil {
-		return Session{}, "", sanitize(err)
-	}
+	releaseErr := lease.Release(context.Background())
 	released = true
+	if releaseErr != nil {
+		return Session{}, "", sanitize(releaseErr)
+	}
 	return cloneSession(next), nextRefresh, nil
 }
 
@@ -206,14 +208,25 @@ func (m *Manager) RevokePrincipal(ctx context.Context, principalID string) error
 }
 
 func (m *Manager) loadValid(ctx context.Context, id string) (Session, error) {
+	now := m.now()
 	session, err := m.store.Get(ctx, id)
 	if err != nil {
 		return Session{}, sanitize(err)
 	}
-	if err := authentication.ValidatePrincipal(session.Principal, m.now()); err != nil {
+	if session.ID != id {
+		return Session{}, authentication.ErrInvalidCredential
+	}
+	if err := validateSession(session); err != nil {
 		return Session{}, err
 	}
-	if !m.now().Before(session.ExpiresAt) {
+	lifetime := session.ExpiresAt.Sub(session.CreatedAt)
+	if lifetime <= 0 || lifetime > m.lifetime {
+		return Session{}, authentication.ErrInvalidCredential
+	}
+	if err := authentication.ValidatePrincipal(session.Principal, now); err != nil {
+		return Session{}, err
+	}
+	if !now.Before(session.ExpiresAt) {
 		return Session{}, authentication.ErrExpired
 	}
 	revoked, err := m.revocations.IsSessionRevoked(ctx, id)
@@ -233,18 +246,20 @@ func (m *Manager) loadValid(ctx context.Context, id string) (Session, error) {
 	return cloneSession(session), nil
 }
 
+func (m *Manager) randomSessionID() (string, error) {
+	encoded, err := m.randomToken()
+	if err != nil {
+		return "", err
+	}
+	return "sess_" + encoded, nil
+}
+
 func (m *Manager) randomToken() (string, error) {
 	var raw [refreshBytes]byte
 	if _, err := io.ReadFull(m.random, raw[:]); err != nil {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(raw[:]), nil
-}
-
-func (m *Manager) nextSessionID(principalID string, now time.Time) string {
-	sequence := m.counter.Add(1)
-	digest := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%d", principalID, now.UnixNano(), sequence)))
-	return "sess_" + base64.RawURLEncoding.EncodeToString(digest[:16])
 }
 
 func (m *Manager) now() time.Time {

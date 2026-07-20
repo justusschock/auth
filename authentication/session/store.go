@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -137,6 +138,9 @@ func (s *MemoryStore) CompareAndSwap(ctx context.Context, id string, expectedVer
 	if fence <= stored.fence {
 		return coordination.ErrLeaseLost
 	}
+	if err := validateTransition(stored.session, id, expectedVersion, next); err != nil {
+		return err
+	}
 	s.sessions[id] = storedSession{session: cloneSession(next), fence: fence}
 	return nil
 }
@@ -260,7 +264,29 @@ func validateSession(session Session) error {
 	if session.CreatedAt.After(session.LastSeenAt) || session.LastSeenAt.After(session.ExpiresAt) || !session.CreatedAt.Before(session.ExpiresAt) {
 		return authentication.ErrInvalidCredential
 	}
+	if session.RefreshDigest == ([32]byte{}) {
+		return authentication.ErrInvalidCredential
+	}
 	if !validClient(session.Client) {
+		return authentication.ErrInvalidCredential
+	}
+	return nil
+}
+
+func validateTransition(current Session, id string, expectedVersion uint64, next Session) error {
+	if next.ID != id || next.ID != current.ID {
+		return authentication.ErrInvalidCredential
+	}
+	if current.Version != expectedVersion || next.Version != current.Version+1 || next.Rotation != current.Rotation+1 {
+		return authentication.ErrInvalidCredential
+	}
+	if !reflect.DeepEqual(next.Principal.Clone(), current.Principal.Clone()) {
+		return authentication.ErrInvalidCredential
+	}
+	if next.CreatedAt != current.CreatedAt || next.ExpiresAt != current.ExpiresAt || next.Client != current.Client {
+		return authentication.ErrInvalidCredential
+	}
+	if next.LastSeenAt.Before(current.LastSeenAt) || next.RefreshDigest == current.RefreshDigest {
 		return authentication.ErrInvalidCredential
 	}
 	return nil
