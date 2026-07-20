@@ -253,23 +253,33 @@ func TestRelayStateUsesSAMLBindingLimit(t *testing.T) {
 }
 
 func TestCompleteUsesProviderClockWithoutCrewjamTemporalGlobals(t *testing.T) {
-	f := fixtureFor(t)
-	providerNow := f.now.Add(10 * time.Minute)
-	store := authsaml.NewMemoryRequestStore()
-	if err := store.Put(context.Background(), authsaml.Request{
-		ID: fixtureRequestID, RelayState: fixtureRelayState, ACSURL: fixtureACSURL, ExpiresAt: providerNow.Add(time.Minute),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	options := fixtureOptions(t, store)
-	options.Clock = func() time.Time { return providerNow }
-	provider, err := authsaml.New(options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	response := fixtureResponse(t, responseOptions{responseTime: providerNow})
-	if _, err := provider.Complete(context.Background(), fixtureCallback(response)); err != nil {
-		t.Fatalf("Complete() with provider-owned clock error = %v", err)
+	for _, test := range []struct {
+		name   string
+		offset time.Duration
+	}{
+		{name: "ahead of process clock", offset: 10 * time.Minute},
+		{name: "behind process clock", offset: -10 * time.Minute},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			f := fixtureFor(t)
+			providerNow := f.now.Add(test.offset)
+			store := authsaml.NewMemoryRequestStore()
+			if err := store.Put(context.Background(), authsaml.Request{
+				ID: fixtureRequestID, RelayState: fixtureRelayState, ACSURL: fixtureACSURL, ExpiresAt: providerNow.Add(time.Minute),
+			}); err != nil {
+				t.Fatal(err)
+			}
+			options := fixtureOptions(t, store)
+			options.Clock = func() time.Time { return providerNow }
+			provider, err := authsaml.New(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := fixtureResponse(t, responseOptions{responseTime: providerNow})
+			if _, err := provider.Complete(context.Background(), fixtureCallback(response)); err != nil {
+				t.Fatalf("Complete() with provider-owned clock error = %v", err)
+			}
+		})
 	}
 }
 
