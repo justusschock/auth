@@ -15,6 +15,9 @@ type recordingCoordinator struct {
 	releaseErr        error
 	lostBeforeRelease bool
 	requestLog        []coordination.AcquireRequest
+	nextToken         coordination.FencingToken
+	held              map[string]bool
+	releases          map[string]int
 }
 
 func (c *recordingCoordinator) Acquire(ctx context.Context, request coordination.AcquireRequest) (coordination.Lease, error) {
@@ -27,9 +30,32 @@ func (c *recordingCoordinator) Acquire(ctx context.Context, request coordination
 	if c.acquireErr != nil {
 		return nil, c.acquireErr
 	}
+	if c.held == nil {
+		c.held = make(map[string]bool)
+	}
+	if c.releases == nil {
+		c.releases = make(map[string]int)
+	}
+	for c.held[request.Key] {
+		if !request.Wait {
+			return nil, coordination.ErrLeaseLost
+		}
+		c.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			c.mu.Lock()
+			return nil, ctx.Err()
+		case <-time.After(time.Millisecond):
+			c.mu.Lock()
+		}
+	}
+	c.nextToken++
+	c.held[request.Key] = true
 	return &recordingLease{
+		coordinator:       c,
 		key:               request.Key,
 		owner:             request.Owner,
+		token:             c.nextToken,
 		releaseErr:        c.releaseErr,
 		lostBeforeRelease: c.lostBeforeRelease,
 		done:              make(chan struct{}),
@@ -45,9 +71,17 @@ func (c *recordingCoordinator) requests() []coordination.AcquireRequest {
 	return out
 }
 
+func (c *recordingCoordinator) releaseCount(key string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.releases[key]
+}
+
 type recordingLease struct {
+	coordinator       *recordingCoordinator
 	key               string
 	owner             string
+	token             coordination.FencingToken
 	releaseErr        error
 	lostBeforeRelease bool
 	done              chan struct{}
@@ -55,7 +89,7 @@ type recordingLease struct {
 }
 
 func (l *recordingLease) Info() coordination.LeaseInfo {
-	return coordination.LeaseInfo{Key: l.key, Owner: l.owner, Token: 1, AcquiredAt: time.Unix(1, 0).UTC(), ExpiresAt: time.Unix(11, 0).UTC()}
+	return coordination.LeaseInfo{Key: l.key, Owner: l.owner, Token: l.token, AcquiredAt: time.Unix(1, 0).UTC(), ExpiresAt: time.Unix(11, 0).UTC()}
 }
 
 func (l *recordingLease) Done() <-chan struct{} {
@@ -70,6 +104,12 @@ func (l *recordingLease) Renew(context.Context, time.Duration) (coordination.Lea
 }
 
 func (l *recordingLease) Release(context.Context) error {
+	l.coordinator.mu.Lock()
+	l.coordinator.releases[l.key]++
+	if l.releaseErr == nil {
+		l.coordinator.held[l.key] = false
+	}
+	l.coordinator.mu.Unlock()
 	if l.releaseErr != nil {
 		return l.releaseErr
 	}
