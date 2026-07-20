@@ -5,8 +5,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -74,8 +74,11 @@ func (e *Engine) Authorize(ctx context.Context, request authorization.Request) (
 	if err := ctx.Err(); err != nil {
 		return authorization.Decision{}, err
 	}
+	if len(policyBytes) > maxPolicyBytes {
+		return authorization.Decision{}, authorization.ErrInvalidSource
+	}
 	policyBytes = append([]byte(nil), policyBytes...)
-	if len(policyBytes) > maxPolicyBytes || len(bytes.TrimSpace(policyBytes)) == 0 {
+	if len(bytes.TrimSpace(policyBytes)) == 0 {
 		return authorization.Decision{}, authorization.ErrInvalidSource
 	}
 	policies, err := cedarsdk.NewPolicySetFromBytes("policy.cedar", policyBytes)
@@ -90,12 +93,15 @@ func (e *Engine) Authorize(ctx context.Context, request authorization.Request) (
 	if err := ctx.Err(); err != nil {
 		return authorization.Decision{}, err
 	}
-	entityBytes = append([]byte(nil), entityBytes...)
-	if len(entityBytes) > maxEntityBytes || len(bytes.TrimSpace(entityBytes)) == 0 {
+	if len(entityBytes) > maxEntityBytes {
 		return authorization.Decision{}, authorization.ErrInvalidSource
 	}
-	var entities cedarsdk.EntityMap
-	if err := json.Unmarshal(entityBytes, &entities); err != nil {
+	entityBytes = append([]byte(nil), entityBytes...)
+	if len(bytes.TrimSpace(entityBytes)) == 0 {
+		return authorization.Decision{}, authorization.ErrInvalidSource
+	}
+	entities, err := parseEntities(entityBytes)
+	if err != nil {
 		return authorization.Decision{}, authorization.ErrInvalidSource
 	}
 
@@ -159,7 +165,7 @@ func requestContext(values map[string]any) (cedarsdk.Record, error) {
 		return cedarsdk.NewRecord(cedarsdk.RecordMap{}), nil
 	}
 	remaining := maxContextItems
-	value, err := contextValue(values, 0, &remaining)
+	value, _, err := contextValue(values, 0, &remaining)
 	if err != nil {
 		return cedarsdk.Record{}, authorization.ErrInvalidRequest
 	}
@@ -170,80 +176,76 @@ func requestContext(values map[string]any) (cedarsdk.Record, error) {
 	return record, nil
 }
 
-func contextValue(value any, depth int, remaining *int) (cedarsdk.Value, error) {
+func contextValue(value any, depth int, remaining *int) (cedarsdk.Value, string, error) {
 	if depth > maxContextDepth || *remaining <= 0 {
-		return nil, authorization.ErrInvalidRequest
+		return nil, "", authorization.ErrInvalidRequest
 	}
 	*remaining--
 	switch value := value.(type) {
 	case bool:
-		return cedarsdk.Boolean(value), nil
+		return cedarsdk.Boolean(value), "bool", nil
 	case string:
 		if !validText(value, maxStringBytes) {
-			return nil, authorization.ErrInvalidRequest
+			return nil, "", authorization.ErrInvalidRequest
 		}
-		return cedarsdk.String(value), nil
-	case int:
-		return cedarsdk.Long(value), nil
-	case int8:
-		return cedarsdk.Long(value), nil
-	case int16:
-		return cedarsdk.Long(value), nil
-	case int32:
-		return cedarsdk.Long(value), nil
+		return cedarsdk.String(value), "string", nil
 	case int64:
-		return cedarsdk.Long(value), nil
-	case uint:
-		if uint64(value) > math.MaxInt64 {
-			return nil, authorization.ErrInvalidRequest
-		}
-		return cedarsdk.Long(value), nil
-	case uint8:
-		return cedarsdk.Long(value), nil
-	case uint16:
-		return cedarsdk.Long(value), nil
-	case uint32:
-		return cedarsdk.Long(value), nil
-	case uint64:
-		if value > math.MaxInt64 {
-			return nil, authorization.ErrInvalidRequest
-		}
-		return cedarsdk.Long(value), nil
+		return cedarsdk.Long(value), "long", nil
 	case []any:
 		converted := make([]cedarsdk.Value, len(value))
+		elementKind := ""
 		for i := range value {
-			item, err := contextValue(value[i], depth+1, remaining)
+			item, kind, err := contextValue(value[i], depth+1, remaining)
 			if err != nil {
-				return nil, err
+				return nil, "", err
+			}
+			if i == 0 {
+				elementKind = kind
+			} else if kind != elementKind {
+				return nil, "", authorization.ErrInvalidRequest
 			}
 			converted[i] = item
 		}
-		return cedarsdk.NewSet(converted...), nil
+		return cedarsdk.NewSet(converted...), "set(" + elementKind + ")", nil
 	case []string:
 		converted := make([]cedarsdk.Value, len(value))
 		for i := range value {
-			item, err := contextValue(value[i], depth+1, remaining)
+			item, _, err := contextValue(value[i], depth+1, remaining)
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
 			converted[i] = item
 		}
-		return cedarsdk.NewSet(converted...), nil
+		return cedarsdk.NewSet(converted...), "set(string)", nil
 	case map[string]any:
 		record := make(cedarsdk.RecordMap, len(value))
-		for key, child := range value {
+		keys := make([]string, 0, len(value))
+		for key := range value {
 			if !validContextKey(key) {
-				return nil, authorization.ErrInvalidRequest
+				return nil, "", authorization.ErrInvalidRequest
 			}
-			converted, err := contextValue(child, depth+1, remaining)
+			keys = append(keys, key)
+		}
+		slices.Sort(keys)
+		var shape strings.Builder
+		shape.WriteString("record{")
+		for _, key := range keys {
+			converted, kind, err := contextValue(value[key], depth+1, remaining)
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
 			record[cedarsdk.String(key)] = converted
+			shape.WriteString(strconv.Itoa(len(key)))
+			shape.WriteByte(':')
+			shape.WriteString(key)
+			shape.WriteByte('=')
+			shape.WriteString(kind)
+			shape.WriteByte(';')
 		}
-		return cedarsdk.NewRecord(record), nil
+		shape.WriteByte('}')
+		return cedarsdk.NewRecord(record), shape.String(), nil
 	default:
-		return nil, authorization.ErrInvalidRequest
+		return nil, "", authorization.ErrInvalidRequest
 	}
 }
 
@@ -310,18 +312,53 @@ func cloneMap(values map[string]any) map[string]any {
 	}
 	clone := make(map[string]any, len(values))
 	for key, value := range values {
-		switch value := value.(type) {
-		case map[string]any:
-			clone[key] = cloneMap(value)
-		case []any:
-			clone[key] = append([]any(nil), value...)
-		case []string:
-			clone[key] = append([]string(nil), value...)
-		default:
-			clone[key] = value
-		}
+		clone[key] = cloneValue(value)
 	}
 	return clone
+}
+
+func cloneValue(value any) any {
+	switch value := value.(type) {
+	case map[string]any:
+		return cloneMap(value)
+	case []any:
+		clone := make([]any, len(value))
+		for i := range value {
+			clone[i] = cloneValue(value[i])
+		}
+		return clone
+	case []string:
+		return append([]string(nil), value...)
+	default:
+		return value
+	}
+}
+
+func parseEntities(document []byte) (cedarsdk.EntityMap, error) {
+	var values []cedarsdk.Entity
+	if err := json.Unmarshal(document, &values); err != nil {
+		return nil, err
+	}
+	entities := make(cedarsdk.EntityMap, len(values))
+	for _, entity := range values {
+		if !validUID(entity.UID) {
+			return nil, authorization.ErrInvalidSource
+		}
+		for _, parent := range entity.Parents.Slice() {
+			if !validUID(parent) {
+				return nil, authorization.ErrInvalidSource
+			}
+		}
+		if _, exists := entities[entity.UID]; exists {
+			return nil, authorization.ErrInvalidSource
+		}
+		entities[entity.UID] = entity
+	}
+	return entities, nil
+}
+
+func validUID(uid cedarsdk.EntityUID) bool {
+	return validEntityType(string(uid.Type)) && validText(string(uid.ID), maxEntityID)
 }
 
 var _ authorization.Authorizer = (*Engine)(nil)
