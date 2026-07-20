@@ -290,7 +290,7 @@ func TestCompleteRejectsExcessiveXMLComplexity(t *testing.T) {
 		options responseOptions
 	}{
 		{name: "depth", options: responseOptions{nestedAttributeDepth: 40}},
-		{name: "elements", options: responseOptions{extraAttributeElements: 200}},
+		{name: "elements", options: responseOptions{extraAttributeElements: 500}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
