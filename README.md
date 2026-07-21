@@ -2,7 +2,7 @@
 
 Composable authentication and Cedar-based authorization for OIDC, OAuth2, SAML, JWT, SSO, and magic links.
 
-> **Status:** Initial repository scaffold; the public API has not been implemented yet.
+> **Status:** Initial implementation is available.
 
 Module path: `github.com/justusschock/go-auth`
 
