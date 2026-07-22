@@ -1,10 +1,12 @@
 package oidc
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -20,7 +22,11 @@ import (
 	"golang.org/x/oauth2"
 )
 
-const defaultStateTTL = 10 * time.Minute
+const (
+	defaultStateTTL        = 10 * time.Minute
+	maxConfiguredClaims    = 128
+	maxConfiguredClaimName = 256
+)
 
 // Secret holds sensitive callback material and redacts it when formatted.
 // Bytes and binary marshaling provide explicit access for provider use and
@@ -123,6 +129,7 @@ type Options struct {
 	Name         string
 	Issuer       string
 	ClientID     string
+	TraitClaims  []string
 	Config       oauth2.Config
 	Verifier     *coreosoidc.IDTokenVerifier
 	RedirectURIs []string
@@ -136,6 +143,7 @@ type Provider struct {
 	name         string
 	issuer       string
 	clientID     string
+	traitClaims  []string
 	config       oauth2.Config
 	verifier     *coreosoidc.IDTokenVerifier
 	redirectURIs map[string]struct{}
@@ -177,6 +185,10 @@ func New(options Options) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
+	traitClaims, err := validateTraitClaims(options.TraitClaims)
+	if err != nil {
+		return nil, err
+	}
 	if !validServiceURL(config.Endpoint.AuthURL) || !validServiceURL(config.Endpoint.TokenURL) {
 		return nil, authentication.ErrInvalidCredential
 	}
@@ -196,6 +208,7 @@ func New(options Options) (*Provider, error) {
 		name:         name,
 		issuer:       issuer,
 		clientID:     clientID,
+		traitClaims:  traitClaims,
 		config:       config,
 		verifier:     options.Verifier,
 		redirectURIs: redirects,
@@ -296,18 +309,79 @@ func (p *Provider) Complete(ctx context.Context, callback authentication.Callbac
 	if len(idToken.Audience) > 1 && claims.AuthorizedParty != p.clientID {
 		return authentication.Principal{}, authentication.ErrUnauthenticated
 	}
+	traits, err := configuredTraits(idToken, p.traitClaims)
+	if err != nil {
+		return authentication.Principal{}, authentication.ErrUnauthenticated
+	}
 	principal := authentication.Principal{
 		ID:              p.issuer + "|" + idToken.Subject,
 		Issuer:          p.issuer,
 		Subject:         idToken.Subject,
 		AuthenticatedAt: idToken.IssuedAt.UTC(),
 		ExpiresAt:       idToken.Expiry.UTC(),
+		Traits:          traits,
 		Methods:         []string{"oidc"},
 	}
 	if err := authentication.ValidatePrincipal(principal, p.clock().UTC()); err != nil {
 		return authentication.Principal{}, authentication.ErrUnauthenticated
 	}
 	return principal.Clone(), nil
+}
+
+func validateTraitClaims(values []string) ([]string, error) {
+	if len(values) > maxConfiguredClaims {
+		return nil, authentication.ErrInvalidCredential
+	}
+	out := slices.Clone(values)
+	seen := make(map[string]struct{}, len(out))
+	for _, value := range out {
+		if invalidText(value) || len(value) > maxConfiguredClaimName || strings.TrimSpace(value) != value {
+			return nil, authentication.ErrInvalidCredential
+		}
+		if _, duplicate := seen[value]; duplicate {
+			return nil, authentication.ErrInvalidCredential
+		}
+		seen[value] = struct{}{}
+	}
+	return out, nil
+}
+
+func configuredTraits(idToken *coreosoidc.IDToken, names []string) (map[string][]string, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	var claims map[string]json.RawMessage
+	if err := idToken.Claims(&claims); err != nil {
+		return nil, err
+	}
+	traits := make(map[string][]string, len(names))
+	for _, name := range names {
+		raw, ok := claims[name]
+		if !ok {
+			continue
+		}
+		raw = bytes.TrimSpace(raw)
+		var values []string
+		switch {
+		case len(raw) > 0 && raw[0] == '"':
+			var value string
+			if err := json.Unmarshal(raw, &value); err != nil {
+				return nil, err
+			}
+			values = []string{value}
+		case len(raw) > 0 && raw[0] == '[':
+			if err := json.Unmarshal(raw, &values); err != nil {
+				return nil, err
+			}
+		default:
+			return nil, authentication.ErrInvalidPrincipal
+		}
+		traits[name] = values
+	}
+	if len(traits) == 0 {
+		return nil, nil
+	}
+	return traits, nil
 }
 
 func (p *Provider) allowedRedirect(redirectURI string) (string, error) {

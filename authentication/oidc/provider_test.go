@@ -255,6 +255,170 @@ func TestCompleteRejectsNonceProviderAndAuthorizedPartyMismatch(t *testing.T) {
 	}
 }
 
+func TestCompleteCopiesOnlyConfiguredVerifiedClaims(t *testing.T) {
+	tests := map[string]struct {
+		traitClaims []string
+		claims      map[string]any
+		want        map[string][]string
+	}{
+		"none configured": {
+			claims: map[string]any{"groups": []string{"admin"}},
+		},
+		"scalar": {
+			traitClaims: []string{"department"},
+			claims:      map[string]any{"department": "medicine", "ignored": "private"},
+			want:        map[string][]string{"department": {"medicine"}},
+		},
+		"array": {
+			traitClaims: []string{"groups"},
+			claims:      map[string]any{"groups": []string{"students", "reviewers"}},
+			want:        map[string][]string{"groups": {"students", "reviewers"}},
+		},
+		"missing": {
+			traitClaims: []string{"groups"},
+			claims:      map[string]any{"department": "medicine"},
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			principal, err := completePrincipal(t, test.traitClaims, test.claims, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(principal.Traits, test.want) {
+				t.Fatalf("Traits = %#v, want %#v", principal.Traits, test.want)
+			}
+		})
+	}
+}
+
+func TestNewOwnsConfiguredTraitClaims(t *testing.T) {
+	configured := []string{"groups"}
+	principal, err := completePrincipal(t, configured, map[string]any{
+		"groups": []string{"admin"},
+		"roles":  []string{"ignored"},
+	}, func() {
+		configured[0] = "roles"
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string][]string{"groups": {"admin"}}; !reflect.DeepEqual(principal.Traits, want) {
+		t.Fatalf("Traits = %#v, want owned configured claims %#v", principal.Traits, want)
+	}
+
+	principal.Traits["groups"][0] = "mutated"
+	if configured[0] != "roles" {
+		t.Fatalf("principal traits alias options: configured = %#v", configured)
+	}
+}
+
+func TestNewRejectsMalformedConfiguredTraitClaims(t *testing.T) {
+	tests := map[string][]string{
+		"empty":      {""},
+		"whitespace": {" groups"},
+		"nul":        {"groups\x00private"},
+		"duplicate":  {"groups", "groups"},
+		"too long":   {strings.Repeat("g", 257)},
+		"too many":   make([]string, 129),
+	}
+	for index := range tests["too many"] {
+		tests["too many"][index] = fmt.Sprintf("claim-%d", index)
+	}
+
+	for name, claims := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := authoidc.New(authoidc.Options{
+				Name:         "work",
+				Issuer:       "https://id.example",
+				ClientID:     "client",
+				RedirectURIs: []string{"https://app.example/callback"},
+				State:        authoidc.NewMemoryStateStore(),
+				TraitClaims:  claims,
+			})
+			if !errors.Is(err, authentication.ErrInvalidCredential) {
+				t.Fatalf("New error = %v, want ErrInvalidCredential", err)
+			}
+		})
+	}
+}
+
+func TestCompleteRejectsMalformedOrUnboundedConfiguredClaims(t *testing.T) {
+	tests := map[string]any{
+		"object":          map[string]any{"sensitive-group": true},
+		"number":          42,
+		"null":            nil,
+		"too many values": make([]string, 129),
+		"oversized value": strings.Repeat("sensitive-value", 300),
+	}
+
+	for name, value := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := completePrincipal(t, []string{"groups"}, map[string]any{"groups": value}, nil)
+			if err != authentication.ErrUnauthenticated {
+				t.Fatalf("Complete error = %v, want exact ErrUnauthenticated", err)
+			}
+			if strings.Contains(err.Error(), "sensitive") {
+				t.Fatalf("Complete error leaked claim content: %v", err)
+			}
+		})
+	}
+}
+
+func completePrincipal(t *testing.T, traitClaims []string, extraClaims map[string]any, afterNew func()) (authentication.Principal, error) {
+	t.Helper()
+	now := time.Unix(350, 0).UTC()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		claims := map[string]any{
+			"iss":   "https://id.example",
+			"sub":   "subject",
+			"aud":   "client",
+			"azp":   "client",
+			"nonce": "nonce",
+			"iat":   now.Unix(),
+			"exp":   now.Add(time.Hour).Unix(),
+		}
+		for name, value := range extraClaims {
+			claims[name] = value
+		}
+		writeToken(w, unsignedIDToken(claims))
+	}))
+	t.Cleanup(server.Close)
+
+	store := authoidc.NewMemoryStateStore()
+	p, err := authoidc.New(authoidc.Options{
+		Name:   "work",
+		Issuer: "https://id.example",
+		Config: oauth2.Config{
+			ClientID: "client",
+			Endpoint: oauth2.Endpoint{AuthURL: "https://id.example/authorize", TokenURL: server.URL},
+		},
+		Verifier:     insecureVerifier("https://id.example", "client", now),
+		RedirectURIs: []string{"https://app.example/callback"},
+		State:        store,
+		Clock:        func() time.Time { return now },
+		TraitClaims:  traitClaims,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterNew != nil {
+		afterNew()
+	}
+	if err := store.Put(context.Background(), authoidc.Pending{
+		Digest:       authoidc.StateDigest("state"),
+		Provider:     "work",
+		RedirectURI:  "https://app.example/callback",
+		Nonce:        authoidc.NewSecret("nonce"),
+		PKCEVerifier: authoidc.NewSecret("verifier"),
+		ExpiresAt:    now.Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return p.Complete(context.Background(), authentication.Callback{StateID: "state", Code: "code"})
+}
+
 var nonceByVerifier sync.Map
 
 func expectedNonce(t *testing.T, r *http.Request) string {
