@@ -41,3 +41,21 @@ func TestNoForbiddenDependency(t *testing.T) {
 		}
 	}
 }
+
+// TestMiddlewareUsesOnlyStandardLibrary keeps transport middleware free of
+// protocol implementations and third-party dependencies.
+func TestMiddlewareUsesOnlyStandardLibrary(t *testing.T) {
+	output, err := exec.Command("go", "list", "-deps", "-f", "{{if not .Standard}}{{.ImportPath}}{{end}}", "./authentication/middleware").CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list: %v: %s", err, output)
+	}
+	allowed := map[string]bool{
+		"github.com/justusschock/go-auth/authentication":            true,
+		"github.com/justusschock/go-auth/authentication/middleware": true,
+	}
+	for _, dependency := range strings.Fields(string(output)) {
+		if !allowed[dependency] {
+			t.Fatalf("middleware imports non-standard package %s", dependency)
+		}
+	}
+}

@@ -222,11 +222,6 @@ func authoidcRedirectAllowed(value string) bool {
 	return parsed.Scheme == "http" && isLoopback(parsed.Hostname())
 }
 
-func isHTTPSURL(value string) bool {
-	parsed, err := url.Parse(value)
-	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil && parsed.Fragment == ""
-}
-
 func validServiceURL(value string) bool {
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {

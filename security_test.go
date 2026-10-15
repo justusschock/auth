@@ -17,8 +17,10 @@ import (
 
 	crewjamsaml "github.com/crewjam/saml"
 	"github.com/justusschock/go-auth/authentication"
+	"github.com/justusschock/go-auth/authentication/apitoken"
 	authjwt "github.com/justusschock/go-auth/authentication/jwt"
 	"github.com/justusschock/go-auth/authentication/magiclink"
+	"github.com/justusschock/go-auth/authentication/middleware"
 	authsaml "github.com/justusschock/go-auth/authentication/saml"
 	"github.com/justusschock/go-auth/authorization"
 	authcedar "github.com/justusschock/go-auth/authorization/cedar"
@@ -88,6 +90,70 @@ func FuzzMagicLinkTokens(f *testing.F) {
 		}
 		_, err := service.Consume(context.Background(), token)
 		assertCredentialNotLeaked(t, err, token)
+	})
+}
+
+func FuzzAPITokens(f *testing.F) {
+	manager, err := apitoken.NewManager(apitoken.Options{
+		Store:  apitoken.NewMemoryStore(),
+		Prefix: "dtc",
+		Pepper: []byte("fuzz-pepper-with-at-least-32-bytes"),
+	})
+	if err != nil {
+		f.Fatal(err)
+	}
+	issued, _, err := manager.Issue(context.Background(), apitoken.IssueRequest{
+		Principal: apitoken.Identity{ID: "issuer|alice", Issuer: "issuer", Subject: "alice"},
+		Name:      "fuzz",
+		TTL:       time.Hour,
+	})
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(issued)
+	f.Add(issued[:len(issued)-1] + "q")
+	f.Add("dtc_" + strings.Repeat("a", 26) + "_" + strings.Repeat("a", 52))
+	f.Add("not-a-token")
+	f.Fuzz(func(t *testing.T, token string) {
+		if len(token) > 64<<10 {
+			t.Skip()
+		}
+		principal, err := manager.Authenticate(context.Background(), authentication.Credential{
+			Kind: authentication.CredentialKindBearer, Token: []byte(token),
+		})
+		assertCredentialNotLeaked(t, err, token)
+		if err == nil && (token != issued || principal.Subject != "alice") {
+			t.Fatalf("accepted unissued token")
+		}
+		if err != nil && token == issued {
+			t.Fatalf("rejected issued token: %v", err)
+		}
+	})
+}
+
+func FuzzAuthorizationHeader(f *testing.F) {
+	f.Add("Bearer dtc_token")
+	f.Add("bearer eyJh.e30.sig")
+	f.Add("Basic dXNlcjpwYXNz")
+	f.Add("Bearer  a==")
+	f.Fuzz(func(t *testing.T, value string) {
+		if len(value) > 64<<10 {
+			t.Skip()
+		}
+		credential, err := middleware.CredentialFromAuthorizationHeader(value)
+		assertCredentialNotLeaked(t, err, value)
+		if err != nil {
+			if credential.Kind != "" || credential.Token != nil {
+				t.Fatalf("rejected header returned credential")
+			}
+			return
+		}
+		if len(credential.Token) == 0 || !strings.HasSuffix(value, string(credential.Token)) {
+			t.Fatalf("token %q not taken from header", credential.Token)
+		}
+		if credential.Kind != authentication.CredentialKindBearer && credential.Kind != authentication.CredentialKindJWT {
+			t.Fatalf("unexpected kind %q", credential.Kind)
+		}
 	})
 }
 

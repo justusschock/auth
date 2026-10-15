@@ -255,8 +255,8 @@ func defaultClaimsMapper(_ context.Context, claims jwt.MapClaims) (authenticatio
 		ID:              fmt.Sprintf("%s|%s", issuer, subject),
 		Issuer:          issuer,
 		Subject:         subject,
-		AuthenticatedAt: issuedAt.Time.UTC(),
-		ExpiresAt:       expiresAt.Time.UTC(),
+		AuthenticatedAt: issuedAt.UTC(),
+		ExpiresAt:       expiresAt.UTC(),
 		Methods:         []string{"jwt"},
 	}, nil
 }

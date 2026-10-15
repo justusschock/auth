@@ -42,6 +42,14 @@ func (p Principal) Clone() Principal {
 	return clone
 }
 
+// Well-known Credential kinds produced by transport adapters.
+const (
+	// CredentialKindJWT is a JWS compact serialization.
+	CredentialKindJWT = "jwt"
+	// CredentialKindBearer is an opaque bearer token that is not a JWT.
+	CredentialKindBearer = "bearer"
+)
+
 // Credential is credential material presented to an Authenticator. Callers
 // should discard it as soon as authentication completes.
 type Credential struct {

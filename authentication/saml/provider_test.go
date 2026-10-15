@@ -423,7 +423,7 @@ func decodeRedirectRequest(t testing.TB, encoded string) string {
 		t.Fatal(err)
 	}
 	reader := flate.NewReader(strings.NewReader(string(compressed)))
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 	decoded, err := io.ReadAll(reader)
 	if err != nil {
 		t.Fatal(err)
