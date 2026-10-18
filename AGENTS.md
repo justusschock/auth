@@ -89,7 +89,7 @@ module-level tests and the README example.
 - `authentication/device/`: RFC 8628 device authorization client.
 - `authentication/session/`: durable sessions with lease-protected rotation.
 - `authorization/`: authorization contracts.
-- `authorization/cedar/`: Cedar engine.
+- `authorization/cedar/`: Cedar engine and structured policies (`Policy`, `Policies`).
 - `internal/authtest/`: in-memory HTTP transport for tests (not public).
 
 `authentication/...` and `authorization/...` never import each other

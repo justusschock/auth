@@ -38,6 +38,7 @@ func TestDirectDependenciesAreAllowlisted(t *testing.T) {
 	allowed := map[string]string{
 		"github.com/beevik/etree":                          "saml",
 		"github.com/cedar-policy/cedar-go":                 "authorization/cedar",
+		"github.com/cedar-policy/cedar-go/ast":             "authorization/cedar", // same module; renders cedar.Policies (ADR-0012)
 		"github.com/coreos/go-oidc/v3/oidc":                "oidc, device",
 		"github.com/crewjam/saml":                          "saml",
 		"github.com/golang-jwt/jwt/v5":                     "jwt",

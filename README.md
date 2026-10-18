@@ -85,9 +85,15 @@ if err != nil {
 }
 fmt.Println("authenticated:", principal.ID)
 
-// Authorization: Cedar policies evaluated per request, default deny.
+// Authorization: Cedar policies evaluated per request, default deny. The
+// policy is permit(principal == User::"alice", action == Action::"read", resource is Document);
+alice := authorization.Principal{Type: "User", ID: "alice"}
+read := authorization.Action{ID: "read"}
+documents := authorization.Resource{Type: "Document"}
 engine, err := authcedar.New(authcedar.Options{
-	Policies: examplePolicies(`permit(principal == User::"alice", action == Action::"read", resource);`),
+	Policies: authcedar.Policies{
+		{Effect: authcedar.Permit, Principal: &alice, Action: &read, Resource: documents},
+	},
 	Entities: exampleEntities{},
 })
 if err != nil {
@@ -110,9 +116,11 @@ for _, action := range []string{"read", "delete"} {
 // delete allowed: false
 ```
 
-`exampleKeys`, `examplePolicies` and `exampleEntities` are three-line
-implementations of `jwt.KeySource`, `authorization.PolicySource` and
-`authorization.EntitySource`; see the example file. More runnable examples live
+`exampleKeys` and `exampleEntities` are three-line implementations of
+`jwt.KeySource` and `authorization.EntitySource`; see the example file.
+`authcedar.Policies` builds simple policies from the same `Principal`,
+`Action` and `Resource` values a request uses; other policies are Cedar text
+from your own `authorization.PolicySource`. More runnable examples live
 next to the packages (for example `apitoken.ExampleManager` and
 `middleware.ExampleHTTP`).
 
@@ -147,8 +155,8 @@ package; import the packages below.
 | `authentication/magiclink` | Single-use magic links |
 | `authentication/device` | OAuth 2.0 device authorization grant (RFC 8628) client |
 | `authentication/session` | Durable sessions with lease-protected refresh-token rotation and revocation |
-| `authorization` | Request, Decision, Authorizer and policy/entity source contracts |
-| `authorization/cedar` | Cedar `Engine` |
+| `authorization` | Request (`Principal`, `Action`, `Resource`), Decision, Authorizer and policy/entity source contracts |
+| `authorization/cedar` | Cedar `Engine`; `Policies` built from `Policy` structs |
 
 Packages under `internal/` are not part of the API and may change at any time.
 
