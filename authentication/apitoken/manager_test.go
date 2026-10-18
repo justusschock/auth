@@ -493,3 +493,38 @@ type authenticatorFunc func(context.Context, authentication.Credential) (authent
 func (f authenticatorFunc) Authenticate(ctx context.Context, credential authentication.Credential) (authentication.Principal, error) {
 	return f(ctx, credential)
 }
+
+// FR-AUTH-27
+func TestSuppliedClockIsHonoured(t *testing.T) {
+	// Outside a synctest bubble and far from the wall clock, so only the
+	// supplied Clock can explain the timestamps. The non-UTC zone checks
+	// that its result is converted to UTC.
+	now := time.Date(2031, 3, 4, 5, 6, 7, 0, time.FixedZone("UTC+2", 2*60*60))
+	store := apitoken.NewMemoryStore()
+	manager := newManager(t, store, func(options *apitoken.Options) {
+		options.Clock = func() time.Time { return now }
+	})
+	token, record := issue(t, manager, defaultRequest())
+	if !record.CreatedAt.Equal(now) || record.CreatedAt.Location() != time.UTC {
+		t.Fatalf("CreatedAt = %v, want %v in UTC", record.CreatedAt, now.UTC())
+	}
+	if !record.ExpiresAt.Equal(now.Add(time.Hour)) {
+		t.Fatalf("ExpiresAt = %v, want %v", record.ExpiresAt, now.Add(time.Hour).UTC())
+	}
+	if _, err := manager.Authenticate(context.Background(), bearer(token)); err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	if err := manager.Revoke(context.Background(), testIdentity().ID, record.ID); err != nil {
+		t.Fatalf("Revoke() error = %v", err)
+	}
+	records, err := manager.List(context.Background(), testIdentity().ID)
+	if err != nil || len(records) != 1 || !records[0].RevokedAt.Equal(now) {
+		t.Fatalf("List() = %v, %v; want one record revoked at %v", records, err, now.UTC())
+	}
+
+	expiring, _ := issue(t, manager, defaultRequest())
+	now = now.Add(time.Hour)
+	if _, err := manager.Authenticate(context.Background(), bearer(expiring)); err != authentication.ErrExpired {
+		t.Fatalf("Authenticate() at supplied expiry error = %v, want ErrExpired", err)
+	}
+}

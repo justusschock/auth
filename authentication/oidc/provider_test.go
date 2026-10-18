@@ -8,75 +8,82 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	coreosoidc "github.com/coreos/go-oidc/v3/oidc"
 	"github.com/justusschock/go-auth/authentication"
 	authoidc "github.com/justusschock/go-auth/authentication/oidc"
+	"github.com/justusschock/go-auth/internal/authtest"
 	"golang.org/x/oauth2"
 )
 
+// FR-AUTH-10
 func TestBeginStoresHashedStateNonceAndPKCE(t *testing.T) {
-	store := authoidc.NewMemoryStateStore()
-	now := time.Unix(100, 0).UTC()
-	p, err := authoidc.New(authoidc.Options{
-		Name:         "work",
-		Issuer:       "https://id.example",
-		ClientID:     "client",
-		RedirectURIs: []string{"https://app.example/callback"},
-		State:        store,
-		Clock:        func() time.Time { return now },
-		Random:       deterministicSecrets(1, 2, 3),
+	synctest.Test(t, func(t *testing.T) {
+		store := authoidc.NewMemoryStateStore()
+		now := time.Now().UTC()
+		p, err := authoidc.New(authoidc.Options{
+			Name:         "work",
+			Issuer:       "https://id.example",
+			ClientID:     "client",
+			RedirectURIs: []string{"https://app.example/callback"},
+			State:        store,
+			Random:       deterministicSecrets(1, 2, 3),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		redirect, err := p.Begin(context.Background(), authentication.BeginRequest{
+			RedirectURI: "https://app.example/callback",
+			Scopes:      []string{"openid", "email"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		query := redirect.URL.Query()
+		if query.Get("state") != redirect.StateID {
+			t.Fatalf("redirect state = %q, StateID = %q", query.Get("state"), redirect.StateID)
+		}
+		if query.Get("code_challenge_method") != "S256" || query.Get("code_challenge") == "" || query.Get("nonce") == "" {
+			t.Fatalf("url=%s", redirect.URL)
+		}
+		if strings.Count(query.Get("scope"), "openid") != 1 {
+			t.Fatalf("scope = %q, want exactly one openid", query.Get("scope"))
+		}
+
+		pending, err := store.Consume(context.Background(), authoidc.StateDigest(redirect.StateID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pending.Provider != "work" || pending.RedirectURI != "https://app.example/callback" {
+			t.Fatalf("pending = %#v", pending)
+		}
+		if want := now.Add(10 * time.Minute); !pending.ExpiresAt.Equal(want) || !redirect.ExpiresAt.Equal(want) {
+			t.Fatalf("state expiry = %v / %v, want default TTL %v", pending.ExpiresAt, redirect.ExpiresAt, want)
+		}
+		nonce := string(pending.Nonce.Bytes())
+		verifier := string(pending.PKCEVerifier.Bytes())
+		if nonce == "" || verifier == "" || nonce == verifier || nonce == redirect.StateID {
+			t.Fatalf("state, nonce, and verifier must be independent: %#v", pending)
+		}
+		if pending.Digest == [32]byte{} || bytes.Contains(pending.Digest[:], []byte(redirect.StateID)) {
+			t.Fatalf("pending digest must not store raw state: %#v", pending.Digest)
+		}
+		if _, err := store.Consume(context.Background(), authoidc.StateDigest(redirect.StateID)); !errors.Is(err, authentication.ErrReplay) {
+			t.Fatalf("second consume error = %v, want ErrReplay", err)
+		}
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	redirect, err := p.Begin(context.Background(), authentication.BeginRequest{
-		RedirectURI: "https://app.example/callback",
-		Scopes:      []string{"openid", "email"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	query := redirect.URL.Query()
-	if query.Get("state") != redirect.StateID {
-		t.Fatalf("redirect state = %q, StateID = %q", query.Get("state"), redirect.StateID)
-	}
-	if query.Get("code_challenge_method") != "S256" || query.Get("code_challenge") == "" || query.Get("nonce") == "" {
-		t.Fatalf("url=%s", redirect.URL)
-	}
-	if strings.Count(query.Get("scope"), "openid") != 1 {
-		t.Fatalf("scope = %q, want exactly one openid", query.Get("scope"))
-	}
-
-	pending, err := store.Consume(context.Background(), authoidc.StateDigest(redirect.StateID))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pending.Provider != "work" || pending.RedirectURI != "https://app.example/callback" {
-		t.Fatalf("pending = %#v", pending)
-	}
-	nonce := string(pending.Nonce.Bytes())
-	verifier := string(pending.PKCEVerifier.Bytes())
-	if nonce == "" || verifier == "" || nonce == verifier || nonce == redirect.StateID {
-		t.Fatalf("state, nonce, and verifier must be independent: %#v", pending)
-	}
-	if pending.Digest == [32]byte{} || bytes.Contains(pending.Digest[:], []byte(redirect.StateID)) {
-		t.Fatalf("pending digest must not store raw state: %#v", pending.Digest)
-	}
-	if _, err := store.Consume(context.Background(), authoidc.StateDigest(redirect.StateID)); !errors.Is(err, authentication.ErrReplay) {
-		t.Fatalf("second consume error = %v, want ErrReplay", err)
-	}
 }
 
+// FR-AUTH-10
 func TestBeginRequiresExactRegisteredHTTPSRedirect(t *testing.T) {
 	p, err := authoidc.New(authoidc.Options{
 		Name:         "work",
@@ -103,158 +110,167 @@ func TestBeginRequiresExactRegisteredHTTPSRedirect(t *testing.T) {
 	}
 }
 
+// FR-AUTH-10
 func TestCompleteConsumesBeforeExchangeAndAllowsOnlyOneCallback(t *testing.T) {
-	now := time.Unix(200, 0).UTC()
-	var tokenRequests int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tokenRequests++
-		if got := r.FormValue("code_verifier"); got == "" {
-			t.Fatalf("token request omitted PKCE verifier")
-		}
-		writeToken(w, unsignedIDToken(map[string]any{
-			"iss":   "https://id.example",
-			"sub":   "subject",
-			"aud":   "client",
-			"azp":   "client",
-			"nonce": expectedNonce(t, r),
-			"iat":   now.Unix(),
-			"exp":   now.Add(time.Hour).Unix(),
-		}))
-	}))
-	defer server.Close()
+	synctest.Test(t, func(t *testing.T) {
+		now := time.Now().UTC()
+		var tokenRequests int
+		tokenEndpoint := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			tokenRequests++
+			if got := r.FormValue("code_verifier"); got == "" {
+				t.Fatalf("token request omitted PKCE verifier")
+			}
+			writeToken(w, unsignedIDToken(map[string]any{
+				"iss":   "https://id.example",
+				"sub":   "subject",
+				"aud":   "client",
+				"azp":   "client",
+				"nonce": expectedNonce(t, r),
+				"iat":   now.Unix(),
+				"exp":   now.Add(time.Hour).Unix(),
+			}))
+		})
 
-	store := authoidc.NewMemoryStateStore()
-	p, err := authoidc.New(authoidc.Options{
-		Name:   "work",
-		Issuer: "https://id.example",
-		Config: oauth2.Config{
-			ClientID: "client",
-			Endpoint: oauth2.Endpoint{
-				AuthURL:  "https://id.example/authorize",
-				TokenURL: server.URL,
+		store := authoidc.NewMemoryStateStore()
+		p, err := authoidc.New(authoidc.Options{
+			Name:   "work",
+			Issuer: "https://id.example",
+			Config: oauth2.Config{
+				ClientID: "client",
+				Endpoint: oauth2.Endpoint{
+					AuthURL:  "https://id.example/authorize",
+					TokenURL: "https://id.example/token",
+				},
 			},
-		},
-		Verifier:     insecureVerifier("https://id.example", "client", now),
-		RedirectURIs: []string{"https://app.example/callback"},
-		State:        store,
-		Clock:        func() time.Time { return now },
-		Random:       deterministicSecrets(7, 8, 9),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	redirect, err := p.Begin(context.Background(), authentication.BeginRequest{RedirectURI: "https://app.example/callback"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	pending, err := store.Consume(context.Background(), authoidc.StateDigest(redirect.StateID))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Put(context.Background(), pending); err != nil {
-		t.Fatal(err)
-	}
-	nonceByVerifier.Store(string(pending.PKCEVerifier.Bytes()), string(pending.Nonce.Bytes()))
-
-	var wg sync.WaitGroup
-	errs := make(chan error, 2)
-	for range 2 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_, err := p.Complete(context.Background(), authentication.Callback{StateID: redirect.StateID, Code: "code"})
-			errs <- err
-		}()
-	}
-	wg.Wait()
-	close(errs)
-
-	var successes, replays int
-	for err := range errs {
-		switch {
-		case err == nil:
-			successes++
-		case errors.Is(err, authentication.ErrReplay):
-			replays++
-		default:
-			t.Fatalf("Complete error = %v", err)
+			Verifier:     insecureVerifier("https://id.example", "client", now),
+			RedirectURIs: []string{"https://app.example/callback"},
+			State:        store,
+			Random:       deterministicSecrets(7, 8, 9),
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	if successes != 1 || replays != 1 || tokenRequests != 1 {
-		t.Fatalf("successes=%d replays=%d tokenRequests=%d", successes, replays, tokenRequests)
-	}
+		redirect, err := p.Begin(context.Background(), authentication.BeginRequest{RedirectURI: "https://app.example/callback"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		pending, err := store.Consume(context.Background(), authoidc.StateDigest(redirect.StateID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Put(context.Background(), pending); err != nil {
+			t.Fatal(err)
+		}
+		nonceByVerifier.Store(string(pending.PKCEVerifier.Bytes()), string(pending.Nonce.Bytes()))
+
+		var wg sync.WaitGroup
+		errs := make(chan error, 2)
+		for range 2 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, err := p.Complete(tokenContext(tokenEndpoint), authentication.Callback{StateID: redirect.StateID, Code: "code"})
+				errs <- err
+			}()
+		}
+		wg.Wait()
+		close(errs)
+
+		var successes, replays int
+		for err := range errs {
+			switch {
+			case err == nil:
+				successes++
+			case errors.Is(err, authentication.ErrReplay):
+				replays++
+			default:
+				t.Fatalf("Complete error = %v", err)
+			}
+		}
+		if successes != 1 || replays != 1 || tokenRequests != 1 {
+			t.Fatalf("successes=%d replays=%d tokenRequests=%d", successes, replays, tokenRequests)
+		}
+	})
 }
 
+// FR-AUTH-10
 func TestCompleteRejectsNonceProviderAndAuthorizedPartyMismatch(t *testing.T) {
-	now := time.Unix(300, 0).UTC()
 	tests := map[string]struct {
 		provider string
-		claims   map[string]any
+		claims   func(now time.Time) map[string]any
 	}{
 		"provider mismatch": {
 			provider: "other",
-			claims: map[string]any{
-				"iss": "https://id.example", "sub": "subject", "aud": "client", "azp": "client",
-				"nonce": "nonce", "iat": now.Unix(), "exp": now.Add(time.Hour).Unix(),
+			claims: func(now time.Time) map[string]any {
+				return map[string]any{
+					"iss": "https://id.example", "sub": "subject", "aud": "client", "azp": "client",
+					"nonce": "nonce", "iat": now.Unix(), "exp": now.Add(time.Hour).Unix(),
+				}
 			},
 		},
 		"nonce mismatch": {
 			provider: "work",
-			claims: map[string]any{
-				"iss": "https://id.example", "sub": "subject", "aud": "client", "azp": "client",
-				"nonce": "wrong", "iat": now.Unix(), "exp": now.Add(time.Hour).Unix(),
+			claims: func(now time.Time) map[string]any {
+				return map[string]any{
+					"iss": "https://id.example", "sub": "subject", "aud": "client", "azp": "client",
+					"nonce": "wrong", "iat": now.Unix(), "exp": now.Add(time.Hour).Unix(),
+				}
 			},
 		},
 		"azp mismatch with multiple audiences": {
 			provider: "work",
-			claims: map[string]any{
-				"iss": "https://id.example", "sub": "subject", "aud": []string{"client", "other"}, "azp": "other",
-				"nonce": "nonce", "iat": now.Unix(), "exp": now.Add(time.Hour).Unix(),
+			claims: func(now time.Time) map[string]any {
+				return map[string]any{
+					"iss": "https://id.example", "sub": "subject", "aud": []string{"client", "other"}, "azp": "other",
+					"nonce": "nonce", "iat": now.Unix(), "exp": now.Add(time.Hour).Unix(),
+				}
 			},
 		},
 	}
 
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				writeToken(w, unsignedIDToken(test.claims))
-			}))
-			defer server.Close()
-			store := authoidc.NewMemoryStateStore()
-			p, err := authoidc.New(authoidc.Options{
-				Name:   "work",
-				Issuer: "https://id.example",
-				Config: oauth2.Config{
-					ClientID: "client",
-					Endpoint: oauth2.Endpoint{AuthURL: "https://id.example/authorize", TokenURL: server.URL},
-				},
-				Verifier:     insecureVerifier("https://id.example", "client", now),
-				RedirectURIs: []string{"https://app.example/callback"},
-				State:        store,
-				Clock:        func() time.Time { return now },
+			synctest.Test(t, func(t *testing.T) {
+				now := time.Now().UTC()
+				tokenEndpoint := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					writeToken(w, unsignedIDToken(test.claims(now)))
+				})
+				store := authoidc.NewMemoryStateStore()
+				p, err := authoidc.New(authoidc.Options{
+					Name:   "work",
+					Issuer: "https://id.example",
+					Config: oauth2.Config{
+						ClientID: "client",
+						Endpoint: oauth2.Endpoint{AuthURL: "https://id.example/authorize", TokenURL: "https://id.example/token"},
+					},
+					Verifier:     insecureVerifier("https://id.example", "client", now),
+					RedirectURIs: []string{"https://app.example/callback"},
+					State:        store,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				pending := authoidc.Pending{
+					Digest:       authoidc.StateDigest("state"),
+					Provider:     test.provider,
+					RedirectURI:  "https://app.example/callback",
+					Nonce:        authoidc.NewSecret("nonce"),
+					PKCEVerifier: authoidc.NewSecret("verifier"),
+					ExpiresAt:    now.Add(time.Minute),
+				}
+				if err := store.Put(context.Background(), pending); err != nil {
+					t.Fatal(err)
+				}
+				_, err = p.Complete(tokenContext(tokenEndpoint), authentication.Callback{StateID: "state", Code: "code"})
+				if !errors.Is(err, authentication.ErrUnauthenticated) {
+					t.Fatalf("Complete error = %v, want ErrUnauthenticated", err)
+				}
 			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			pending := authoidc.Pending{
-				Digest:       authoidc.StateDigest("state"),
-				Provider:     test.provider,
-				RedirectURI:  "https://app.example/callback",
-				Nonce:        authoidc.NewSecret("nonce"),
-				PKCEVerifier: authoidc.NewSecret("verifier"),
-				ExpiresAt:    now.Add(time.Minute),
-			}
-			if err := store.Put(context.Background(), pending); err != nil {
-				t.Fatal(err)
-			}
-			_, err = p.Complete(context.Background(), authentication.Callback{StateID: "state", Code: "code"})
-			if !errors.Is(err, authentication.ErrUnauthenticated) {
-				t.Fatalf("Complete error = %v, want ErrUnauthenticated", err)
-			}
 		})
 	}
 }
 
+// FR-AUTH-11
 func TestCompleteCopiesOnlyConfiguredVerifiedClaims(t *testing.T) {
 	tests := map[string]struct {
 		traitClaims []string
@@ -293,6 +309,7 @@ func TestCompleteCopiesOnlyConfiguredVerifiedClaims(t *testing.T) {
 	}
 }
 
+// FR-AUTH-11
 func TestNewOwnsConfiguredTraitClaims(t *testing.T) {
 	configured := []string{"groups"}
 	principal, err := completePrincipal(t, configured, map[string]any{
@@ -314,6 +331,7 @@ func TestNewOwnsConfiguredTraitClaims(t *testing.T) {
 	}
 }
 
+// FR-AUTH-11
 func TestNewRejectsMalformedConfiguredTraitClaims(t *testing.T) {
 	tests := map[string][]string{
 		"empty":      {""},
@@ -344,6 +362,7 @@ func TestNewRejectsMalformedConfiguredTraitClaims(t *testing.T) {
 	}
 }
 
+// FR-AUTH-11
 func TestCompleteRejectsMalformedOrUnboundedConfiguredClaims(t *testing.T) {
 	tests := map[string]any{
 		"object":          map[string]any{"sensitive-group": true},
@@ -366,10 +385,18 @@ func TestCompleteRejectsMalformedOrUnboundedConfiguredClaims(t *testing.T) {
 	}
 }
 
-func completePrincipal(t *testing.T, traitClaims []string, extraClaims map[string]any, afterNew func()) (authentication.Principal, error) {
+func completePrincipal(t *testing.T, traitClaims []string, extraClaims map[string]any, afterNew func()) (principal authentication.Principal, err error) {
 	t.Helper()
-	now := time.Unix(350, 0).UTC()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	synctest.Test(t, func(t *testing.T) {
+		principal, err = completePrincipalInBubble(t, traitClaims, extraClaims, afterNew)
+	})
+	return principal, err
+}
+
+func completePrincipalInBubble(t *testing.T, traitClaims []string, extraClaims map[string]any, afterNew func()) (authentication.Principal, error) {
+	t.Helper()
+	now := time.Now().UTC()
+	tokenEndpoint := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		claims := map[string]any{
 			"iss":   "https://id.example",
 			"sub":   "subject",
@@ -383,8 +410,7 @@ func completePrincipal(t *testing.T, traitClaims []string, extraClaims map[strin
 			claims[name] = value
 		}
 		writeToken(w, unsignedIDToken(claims))
-	}))
-	t.Cleanup(server.Close)
+	})
 
 	store := authoidc.NewMemoryStateStore()
 	p, err := authoidc.New(authoidc.Options{
@@ -392,12 +418,11 @@ func completePrincipal(t *testing.T, traitClaims []string, extraClaims map[strin
 		Issuer: "https://id.example",
 		Config: oauth2.Config{
 			ClientID: "client",
-			Endpoint: oauth2.Endpoint{AuthURL: "https://id.example/authorize", TokenURL: server.URL},
+			Endpoint: oauth2.Endpoint{AuthURL: "https://id.example/authorize", TokenURL: "https://id.example/token"},
 		},
 		Verifier:     insecureVerifier("https://id.example", "client", now),
 		RedirectURIs: []string{"https://app.example/callback"},
 		State:        store,
-		Clock:        func() time.Time { return now },
 		TraitClaims:  traitClaims,
 	})
 	if err != nil {
@@ -416,7 +441,12 @@ func completePrincipal(t *testing.T, traitClaims []string, extraClaims map[strin
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return p.Complete(context.Background(), authentication.Callback{StateID: "state", Code: "code"})
+	return p.Complete(tokenContext(tokenEndpoint), authentication.Callback{StateID: "state", Code: "code"})
+}
+
+// tokenContext routes the provider's token request to handler in memory.
+func tokenContext(handler http.Handler) context.Context {
+	return context.WithValue(context.Background(), oauth2.HTTPClient, authtest.Client(handler))
 }
 
 var nonceByVerifier sync.Map
@@ -472,6 +502,7 @@ func deterministicSecrets(values ...byte) *bytes.Reader {
 	return bytes.NewReader(data)
 }
 
+// NFR-AUTH-02
 func TestStateDigestUsesSHA256LookupOnly(t *testing.T) {
 	raw := "raw-state"
 	digest := authoidc.StateDigest(raw)
@@ -483,6 +514,7 @@ func TestStateDigestUsesSHA256LookupOnly(t *testing.T) {
 	}
 }
 
+// FR-AUTH-10
 func TestCompletePassesOnlyStateDigestToStore(t *testing.T) {
 	store := &recordingStateStore{consumeErr: authentication.ErrReplay}
 	p := newTestProvider(t, store)
@@ -496,6 +528,7 @@ func TestCompletePassesOnlyStateDigestToStore(t *testing.T) {
 	}
 }
 
+// NFR-AUTH-01
 func TestProviderSanitizesStateStoreErrors(t *testing.T) {
 	const raw = "raw-state nonce-secret verifier-secret"
 	t.Run("put", func(t *testing.T) {
@@ -528,6 +561,7 @@ func TestProviderSanitizesStateStoreErrors(t *testing.T) {
 	})
 }
 
+// NFR-AUTH-02
 func TestPendingSecretsAreOpaqueRedactingAndPersistable(t *testing.T) {
 	pendingType := reflect.TypeOf(authoidc.Pending{})
 	for _, name := range []string{"Nonce", "PKCEVerifier"} {
@@ -569,6 +603,7 @@ func TestPendingSecretsAreOpaqueRedactingAndPersistable(t *testing.T) {
 	}
 }
 
+// FR-AUTH-10
 func TestNewRejectsConflictingClientIDs(t *testing.T) {
 	_, err := authoidc.New(authoidc.Options{
 		Name:     "work",
@@ -586,6 +621,7 @@ func TestNewRejectsConflictingClientIDs(t *testing.T) {
 	}
 }
 
+// FR-AUTH-10
 func TestMemoryStateStorePutIsCreateOnly(t *testing.T) {
 	store := authoidc.NewMemoryStateStore()
 	digest := authoidc.StateDigest("state")
@@ -644,5 +680,102 @@ func assertSanitizedError(t *testing.T, got, want error, sensitive string) {
 	}
 	if strings.Contains(got.Error(), sensitive) {
 		t.Fatalf("error leaked sensitive text %q: %v", sensitive, got)
+	}
+}
+
+// TestCompleteRejectsStateAfterTTL advances virtual time past StateTTL. The
+// state is consumed (and so burned) before the expiry check, and the code is
+// never exchanged.
+// FR-AUTH-13
+func TestCompleteRejectsStateAfterTTL(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := authoidc.NewMemoryStateStore()
+		p, err := authoidc.New(authoidc.Options{
+			Name:         "work",
+			Issuer:       "https://id.example",
+			ClientID:     "client",
+			Verifier:     insecureVerifier("https://id.example", "client", time.Now()),
+			RedirectURIs: []string{"https://app.example/callback"},
+			State:        store,
+			StateTTL:     time.Minute,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tokenEndpoint := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			t.Error("code exchanged for expired state")
+		})
+		redirect, err := p.Begin(context.Background(), authentication.BeginRequest{RedirectURI: "https://app.example/callback"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Minute)
+		_, err = p.Complete(tokenContext(tokenEndpoint), authentication.Callback{StateID: redirect.StateID, Code: "code"})
+		if !errors.Is(err, authentication.ErrExpired) {
+			t.Fatalf("Complete error = %v, want ErrExpired", err)
+		}
+		if _, err := store.Consume(context.Background(), authoidc.StateDigest(redirect.StateID)); !errors.Is(err, authentication.ErrReplay) {
+			t.Fatalf("expired state was not consumed: %v", err)
+		}
+	})
+}
+
+// TestProviderHonorsSuppliedClock runs on the wall clock with an ID token
+// issued years from now, so only Options.Clock (and the verifier's own
+// clock) can accept it; moving Options.Clock to a pending state's expiry
+// expires it.
+// FR-AUTH-27
+func TestProviderHonorsSuppliedClock(t *testing.T) {
+	now := time.Date(2031, 3, 4, 5, 6, 7, 0, time.FixedZone("UTC+2", 2*60*60))
+	issuedAt := now.UTC()
+	tokenEndpoint := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeToken(w, unsignedIDToken(map[string]any{
+			"iss": "https://id.example", "sub": "subject", "aud": "client", "azp": "client",
+			"nonce": "nonce", "iat": issuedAt.Unix(), "exp": issuedAt.Add(time.Hour).Unix(),
+		}))
+	})
+	store := authoidc.NewMemoryStateStore()
+	p, err := authoidc.New(authoidc.Options{
+		Name:         "work",
+		Issuer:       "https://id.example",
+		ClientID:     "client",
+		Verifier:     insecureVerifier("https://id.example", "client", issuedAt),
+		RedirectURIs: []string{"https://app.example/callback"},
+		State:        store,
+		StateTTL:     time.Minute,
+		Clock:        func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	redirect, err := p.Begin(context.Background(), authentication.BeginRequest{RedirectURI: "https://app.example/callback"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := now.Add(time.Minute); !redirect.ExpiresAt.Equal(want) || redirect.ExpiresAt.Location() != time.UTC {
+		t.Fatalf("ExpiresAt = %v, want %v in UTC", redirect.ExpiresAt, want.UTC())
+	}
+	put := func(state string) {
+		t.Helper()
+		if err := store.Put(context.Background(), authoidc.Pending{
+			Digest: authoidc.StateDigest(state), Provider: "work", RedirectURI: "https://app.example/callback",
+			Nonce: authoidc.NewSecret("nonce"), PKCEVerifier: authoidc.NewSecret("verifier"),
+			ExpiresAt: now.UTC().Add(time.Minute),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("first")
+	principal, err := p.Complete(tokenContext(tokenEndpoint), authentication.Callback{StateID: "first", Code: "code"})
+	if err != nil {
+		t.Fatalf("Complete at supplied time error = %v", err)
+	}
+	if !principal.AuthenticatedAt.Equal(issuedAt) {
+		t.Fatalf("AuthenticatedAt = %v, want %v", principal.AuthenticatedAt, issuedAt)
+	}
+	put("second")
+	now = now.Add(time.Minute)
+	if _, err := p.Complete(tokenContext(tokenEndpoint), authentication.Callback{StateID: "second", Code: "code"}); !errors.Is(err, authentication.ErrExpired) {
+		t.Fatalf("Complete after supplied StateTTL error = %v, want ErrExpired", err)
 	}
 }

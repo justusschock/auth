@@ -141,7 +141,6 @@ func fixtureOptions(t testing.TB, store authsaml.RequestStore) authsaml.Options 
 		Key:              f.spKey,
 		Certificate:      f.spCert,
 		RequestStore:     store,
-		Clock:            func() time.Time { return f.now },
 		AllowedClockSkew: 30 * time.Second,
 		MaxResponseBytes: 64 << 10,
 	}

@@ -525,6 +525,9 @@ func newTestManager(t *testing.T, store session.Store, revocations session.Revoc
 	if overrides.Lifetime != 0 {
 		options.Lifetime = overrides.Lifetime
 	}
+	if overrides.Clock != nil {
+		options.Clock = overrides.Clock
+	}
 	manager, err := session.NewManager(options)
 	if err != nil {
 		t.Fatal(err)
@@ -586,4 +589,37 @@ func (s *corruptStore) CompareAndSwap(context.Context, string, uint64, uint64, s
 
 func (s *corruptStore) ListByPrincipal(context.Context, string) ([]session.Session, error) {
 	return nil, errors.New("not used")
+}
+
+// TestSuppliedClockIsHonoured runs on the wall clock with a principal that is
+// valid only years from now, so only Options.Clock can accept it; moving that
+// clock drives rotation timestamps and session expiry.
+// FR-AUTH-27
+func TestSuppliedClockIsHonoured(t *testing.T) {
+	now := time.Date(2031, 3, 4, 5, 6, 7, 0, time.FixedZone("UTC+2", 2*60*60))
+	store := session.NewMemoryStore()
+	manager := newTestManager(t, store, session.NewMemoryRevocationStore(), &recordingCoordinator{}, session.Options{
+		Clock: func() time.Time { return now },
+	})
+	created, token, err := manager.Create(context.Background(), validPrincipal(now.UTC()), session.ClientInfo{})
+	if err != nil {
+		t.Fatalf("Create() at supplied time error = %v", err)
+	}
+	if !created.CreatedAt.Equal(now) || created.CreatedAt.Location() != time.UTC || !created.ExpiresAt.Equal(now.Add(time.Hour)) {
+		t.Fatalf("timestamps = %v..%v, want %v..%v in UTC", created.CreatedAt, created.ExpiresAt, now.UTC(), now.Add(time.Hour).UTC())
+	}
+
+	now = now.Add(30 * time.Minute)
+	rotated, _, err := manager.Rotate(context.Background(), created.ID, token)
+	if err != nil {
+		t.Fatalf("Rotate() error = %v", err)
+	}
+	if !rotated.LastSeenAt.Equal(now) {
+		t.Fatalf("LastSeenAt = %v, want %v", rotated.LastSeenAt, now.UTC())
+	}
+
+	now = now.Add(30 * time.Minute)
+	if _, err := manager.Validate(context.Background(), created.ID); !errors.Is(err, authentication.ErrExpired) {
+		t.Fatalf("Validate() at supplied expiry error = %v, want ErrExpired", err)
+	}
 }

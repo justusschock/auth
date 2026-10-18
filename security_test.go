@@ -51,8 +51,7 @@ func FuzzJWTBytes(f *testing.F) {
 
 // FR-AUTH-16
 func FuzzSAMLResponseBytes(f *testing.F) {
-	now := time.Now().UTC().Truncate(time.Second)
-	provider, store := fuzzSAMLProvider(f, now)
+	provider, store := fuzzSAMLProvider(f, time.Now().UTC().Truncate(time.Second))
 	f.Add([]byte("<Response/>"))
 	f.Add([]byte("not xml"))
 	f.Fuzz(func(t *testing.T, response []byte) {
@@ -62,7 +61,7 @@ func FuzzSAMLResponseBytes(f *testing.F) {
 		digest := sha256.Sum256(response)
 		requestID := "req-" + base64.RawURLEncoding.EncodeToString(digest[:12])
 		if err := store.Put(context.Background(), authsaml.Request{
-			ID: requestID, RelayState: "relay", ACSURL: "https://app.example/saml/acs", ExpiresAt: now.Add(time.Minute),
+			ID: requestID, RelayState: "relay", ACSURL: "https://app.example/saml/acs", ExpiresAt: time.Now().UTC().Add(time.Minute),
 		}); err != nil && !errors.Is(err, authentication.ErrReplay) {
 			t.Fatal(err)
 		}
@@ -211,7 +210,7 @@ func fuzzSAMLProvider(t testing.TB, now time.Time) (*authsaml.Provider, *authsam
 	spKey, spCert := fuzzCertificate(t, "fuzz-sp", now)
 	metadata := &crewjamsaml.EntityDescriptor{
 		EntityID:   "https://idp.example/saml/metadata",
-		ValidUntil: now.Add(time.Hour),
+		ValidUntil: now.Add(24 * time.Hour),
 		IDPSSODescriptors: []crewjamsaml.IDPSSODescriptor{{
 			SSODescriptor: crewjamsaml.SSODescriptor{RoleDescriptor: crewjamsaml.RoleDescriptor{
 				ProtocolSupportEnumeration: "urn:oasis:names:tc:SAML:2.0:protocol",
@@ -226,7 +225,7 @@ func fuzzSAMLProvider(t testing.TB, now time.Time) (*authsaml.Provider, *authsam
 		Name: "fuzz", EntityID: mustParseURL(t, "https://sp.example/saml/metadata"),
 		MetadataURL: mustParseURL(t, "https://sp.example/saml/metadata-document"),
 		ACSURL:      mustParseURL(t, "https://app.example/saml/acs"), IDPMetadata: metadata,
-		Key: spKey, Certificate: spCert, RequestStore: store, Clock: func() time.Time { return now }, MaxResponseBytes: 64 << 10,
+		Key: spKey, Certificate: spCert, RequestStore: store, MaxResponseBytes: 64 << 10,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -242,7 +241,7 @@ func fuzzCertificate(t testing.TB, commonName string, now time.Time) (*rsa.Priva
 	}
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(now.UnixNano()), Subject: pkix.Name{CommonName: commonName},
-		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature,
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour), KeyUsage: x509.KeyUsageDigitalSignature,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	if err != nil {
