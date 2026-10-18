@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/justusschock/go-auth/authentication"
@@ -18,64 +19,65 @@ import (
 )
 
 func TestCreateStoresDigestOnlyAndReturnsCopiedData(t *testing.T) {
-	now := time.Unix(1000, 0).UTC()
-	sessionIDRaw := bytes.Repeat([]byte{6}, 32)
-	refreshRaw := bytes.Repeat([]byte{7}, 32)
-	store := session.NewMemoryStore()
-	revocations := session.NewMemoryRevocationStore()
-	manager := newTestManager(t, store, revocations, &recordingCoordinator{}, session.Options{
-		Random: bytes.NewReader(append(sessionIDRaw, refreshRaw...)),
-		Clock:  func() time.Time { return now },
+	synctest.Test(t, func(t *testing.T) {
+		now := time.Now().UTC()
+		sessionIDRaw := bytes.Repeat([]byte{6}, 32)
+		refreshRaw := bytes.Repeat([]byte{7}, 32)
+		store := session.NewMemoryStore()
+		revocations := session.NewMemoryRevocationStore()
+		manager := newTestManager(t, store, revocations, &recordingCoordinator{}, session.Options{
+			Random: bytes.NewReader(append(sessionIDRaw, refreshRaw...)),
+		})
+		principal := validPrincipal(now)
+		client := session.ClientInfo{UserAgent: "browser", IPAddress: "203.0.113.10", DeviceID: "device-1"}
+
+		created, token, err := manager.Create(context.Background(), principal, client)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		wantID := "sess_" + base64.RawURLEncoding.EncodeToString(sessionIDRaw)
+		if created.ID != wantID {
+			t.Fatalf("session ID = %q, want independent 32-byte random ID %q", created.ID, wantID)
+		}
+		wantToken := base64.RawURLEncoding.EncodeToString(refreshRaw)
+		if token != wantToken || len(token) != 43 {
+			t.Fatalf("token = %q length %d, want exact base64url token", token, len(token))
+		}
+		stored, err := store.Get(context.Background(), created.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stored.RefreshDigest != sha256.Sum256([]byte(wantToken)) {
+			t.Fatalf("stored digest = %x", stored.RefreshDigest)
+		}
+		if bytes.Contains([]byte(sessionSummary(stored)), []byte(wantToken)) {
+			t.Fatalf("stored session exposed raw refresh token: %#v", stored)
+		}
+		if stored.CreatedAt != now || stored.LastSeenAt != now || stored.ExpiresAt != now.Add(time.Hour) {
+			t.Fatalf("stored timestamps = %#v", stored)
+		}
+		if stored.Version != 1 || stored.Rotation != 0 {
+			t.Fatalf("version=%d rotation=%d", stored.Version, stored.Rotation)
+		}
+		principal.Traits["role"][0] = "mutated"
+		client.UserAgent = "mutated"
+		if created.Principal.Traits["role"][0] != "admin" || created.Client.UserAgent != "browser" {
+			t.Fatalf("Create returned aliased data: %#v %#v", created.Principal, created.Client)
+		}
+		stored.Principal.Traits["role"][0] = "mutated again"
+		again, err := store.Get(context.Background(), created.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if again.Principal.Traits["role"][0] != "admin" {
+			t.Fatalf("store returned aliased principal: %#v", again.Principal)
+		}
 	})
-	principal := validPrincipal(now)
-	client := session.ClientInfo{UserAgent: "browser", IPAddress: "203.0.113.10", DeviceID: "device-1"}
-
-	created, token, err := manager.Create(context.Background(), principal, client)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	wantID := "sess_" + base64.RawURLEncoding.EncodeToString(sessionIDRaw)
-	if created.ID != wantID {
-		t.Fatalf("session ID = %q, want independent 32-byte random ID %q", created.ID, wantID)
-	}
-	wantToken := base64.RawURLEncoding.EncodeToString(refreshRaw)
-	if token != wantToken || len(token) != 43 {
-		t.Fatalf("token = %q length %d, want exact base64url token", token, len(token))
-	}
-	stored, err := store.Get(context.Background(), created.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored.RefreshDigest != sha256.Sum256([]byte(wantToken)) {
-		t.Fatalf("stored digest = %x", stored.RefreshDigest)
-	}
-	if bytes.Contains([]byte(sessionSummary(stored)), []byte(wantToken)) {
-		t.Fatalf("stored session exposed raw refresh token: %#v", stored)
-	}
-	if stored.CreatedAt != now || stored.LastSeenAt != now || stored.ExpiresAt != now.Add(time.Hour) {
-		t.Fatalf("stored timestamps = %#v", stored)
-	}
-	if stored.Version != 1 || stored.Rotation != 0 {
-		t.Fatalf("version=%d rotation=%d", stored.Version, stored.Rotation)
-	}
-	principal.Traits["role"][0] = "mutated"
-	client.UserAgent = "mutated"
-	if created.Principal.Traits["role"][0] != "admin" || created.Client.UserAgent != "browser" {
-		t.Fatalf("Create returned aliased data: %#v %#v", created.Principal, created.Client)
-	}
-	stored.Principal.Traits["role"][0] = "mutated again"
-	again, err := store.Get(context.Background(), created.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if again.Principal.Traits["role"][0] != "admin" {
-		t.Fatalf("store returned aliased principal: %#v", again.Principal)
-	}
 }
 
 func TestCreateRejectsInvalidBoundsAndRandomFailure(t *testing.T) {
-	now := time.Unix(1100, 0).UTC()
+	now := time.Now().UTC()
 	for name, options := range map[string]session.Options{
 		"missing store":       {Revocations: session.NewMemoryRevocationStore(), Coordinator: &recordingCoordinator{}, ManagerID: "manager", Lifetime: time.Hour},
 		"missing revocations": {Store: session.NewMemoryStore(), Coordinator: &recordingCoordinator{}, ManagerID: "manager", Lifetime: time.Hour},
@@ -93,7 +95,6 @@ func TestCreateRejectsInvalidBoundsAndRandomFailure(t *testing.T) {
 
 	manager := newTestManager(t, session.NewMemoryStore(), session.NewMemoryRevocationStore(), &recordingCoordinator{}, session.Options{
 		Random: bytes.NewReader([]byte("short")),
-		Clock:  func() time.Time { return now },
 	})
 	if _, _, err := manager.Create(context.Background(), validPrincipal(now), session.ClientInfo{}); !errors.Is(err, authentication.ErrInvalidCredential) {
 		t.Fatalf("Create() error = %v, want ErrInvalidCredential", err)
@@ -104,141 +105,144 @@ func TestCreateRejectsInvalidBoundsAndRandomFailure(t *testing.T) {
 	longClient := session.ClientInfo{UserAgent: string(bytes.Repeat([]byte{'a'}, 513))}
 	if _, _, err := newTestManager(t, session.NewMemoryStore(), session.NewMemoryRevocationStore(), &recordingCoordinator{}, session.Options{
 		Random: bytes.NewReader(bytes.Repeat([]byte{1}, 32)),
-		Clock:  func() time.Time { return now },
 	}).Create(context.Background(), validPrincipal(now), longClient); !errors.Is(err, authentication.ErrInvalidCredential) {
 		t.Fatalf("Create(long client) error = %v, want ErrInvalidCredential", err)
 	}
 }
 
 func TestRotateUsesLeaseAndHasExactlyOneConcurrentWinner(t *testing.T) {
-	now := time.Unix(1200, 0).UTC()
-	store := session.NewMemoryStore()
-	revocations := session.NewMemoryRevocationStore()
-	coordinator := &recordingCoordinator{}
-	random := &lockedReader{chunks: [][]byte{
-		bytes.Repeat([]byte{1}, 32),
-		bytes.Repeat([]byte{2}, 32),
-		bytes.Repeat([]byte{3}, 32),
-		bytes.Repeat([]byte{4}, 32),
-		bytes.Repeat([]byte{5}, 32),
-		bytes.Repeat([]byte{6}, 32),
-		bytes.Repeat([]byte{7}, 32),
-		bytes.Repeat([]byte{8}, 32),
-		bytes.Repeat([]byte{9}, 32),
-	}}
-	manager := newTestManager(t, store, revocations, coordinator, session.Options{
-		Random: random,
-		Clock:  func() time.Time { return now },
-	})
-	created, token, err := manager.Create(context.Background(), validPrincipal(now), session.ClientInfo{UserAgent: "browser"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var wins atomic.Int32
-	var replays atomic.Int32
-	var wg sync.WaitGroup
-	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			rotated, _, err := manager.Rotate(context.Background(), created.ID, token)
-			switch {
-			case err == nil:
-				wins.Add(1)
-				if rotated.Version != 2 || rotated.Rotation != 1 || rotated.RefreshDigest == created.RefreshDigest {
-					t.Errorf("rotated session = %#v", rotated)
-				}
-			case errors.Is(err, authentication.ErrReplay), errors.Is(err, authentication.ErrUnauthenticated):
-				replays.Add(1)
-			default:
-				t.Errorf("Rotate() error = %v", err)
-			}
-		}()
-	}
-	wg.Wait()
-	if wins.Load() != 1 || replays.Load() != 7 {
-		t.Fatalf("wins=%d replays=%d", wins.Load(), replays.Load())
-	}
-	requests := coordinator.requests()
-	if len(requests) != 8 {
-		t.Fatalf("acquire calls = %d, want 8", len(requests))
-	}
-	for _, request := range requests {
-		if request.Key != "auth/session/"+created.ID || request.Owner != "manager-a" || request.TTL != 10*time.Second || !request.Wait {
-			t.Fatalf("Acquire request = %#v", request)
+	synctest.Test(t, func(t *testing.T) {
+		now := time.Now().UTC()
+		revocations := session.NewMemoryRevocationStore()
+		coordinator := &recordingCoordinator{}
+		store := newObservingStore(coordinator)
+		random := &lockedReader{chunks: [][]byte{
+			bytes.Repeat([]byte{1}, 32),
+			bytes.Repeat([]byte{2}, 32),
+			bytes.Repeat([]byte{3}, 32),
+			bytes.Repeat([]byte{4}, 32),
+			bytes.Repeat([]byte{5}, 32),
+			bytes.Repeat([]byte{6}, 32),
+			bytes.Repeat([]byte{7}, 32),
+			bytes.Repeat([]byte{8}, 32),
+			bytes.Repeat([]byte{9}, 32),
+		}}
+		manager := newTestManager(t, store, revocations, coordinator, session.Options{
+			Random: random,
+		})
+		created, token, err := manager.Create(context.Background(), validPrincipal(now), session.ClientInfo{UserAgent: "browser"})
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	if !store.ObservedGetWhileLocked() {
-		t.Fatal("session was not loaded while the lease was held")
-	}
+
+		var wins atomic.Int32
+		var replays atomic.Int32
+		var wg sync.WaitGroup
+		for range 8 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				rotated, _, err := manager.Rotate(context.Background(), created.ID, token)
+				switch {
+				case err == nil:
+					wins.Add(1)
+					if rotated.Version != 2 || rotated.Rotation != 1 || rotated.RefreshDigest == created.RefreshDigest {
+						t.Errorf("rotated session = %#v", rotated)
+					}
+				case errors.Is(err, authentication.ErrReplay), errors.Is(err, authentication.ErrUnauthenticated):
+					replays.Add(1)
+				default:
+					t.Errorf("Rotate() error = %v", err)
+				}
+			}()
+		}
+		wg.Wait()
+		if wins.Load() != 1 || replays.Load() != 7 {
+			t.Fatalf("wins=%d replays=%d", wins.Load(), replays.Load())
+		}
+		requests := coordinator.requests()
+		if len(requests) != 8 {
+			t.Fatalf("acquire calls = %d, want 8", len(requests))
+		}
+		for _, request := range requests {
+			if request.Key != "auth/session/"+created.ID || request.Owner != "manager-a" || request.TTL != 10*time.Second || !request.Wait {
+				t.Fatalf("Acquire request = %#v", request)
+			}
+		}
+		if store.getsWithLease.Load() != 8 || store.getsWithoutLock.Load() != 0 {
+			t.Fatalf("Get calls with lease = %d, without = %d; want every rotation to load the session under its lease",
+				store.getsWithLease.Load(), store.getsWithoutLock.Load())
+		}
+	})
 }
 
 func TestRotateFailsClosedOnLeaseAndStoreAmbiguity(t *testing.T) {
-	now := time.Unix(1300, 0).UTC()
-	for name, setup := range map[string]func(*recordingCoordinator, *session.MemoryStore){
-		"canceled acquire": func(c *recordingCoordinator, _ *session.MemoryStore) {
+	for name, setup := range map[string]func(*recordingCoordinator, *observingStore){
+		"canceled acquire": func(c *recordingCoordinator, _ *observingStore) {
 			c.acquireErr = context.Canceled
 		},
-		"lease lost before cas": func(c *recordingCoordinator, _ *session.MemoryStore) {
+		"lease lost before cas": func(c *recordingCoordinator, _ *observingStore) {
 			c.lostBeforeRelease = true
 		},
-		"release failure": func(c *recordingCoordinator, _ *session.MemoryStore) {
+		"release failure": func(c *recordingCoordinator, _ *observingStore) {
 			c.releaseErr = errors.New("backend release details")
 		},
-		"cas conflict": func(_ *recordingCoordinator, store *session.MemoryStore) {
-			store.FailNextCompareAndSwap(authentication.ErrReplay)
+		"cas conflict": func(_ *recordingCoordinator, store *observingStore) {
+			store.failNextCompareAndSwap(authentication.ErrReplay)
 		},
-		"backend ambiguity": func(_ *recordingCoordinator, store *session.MemoryStore) {
-			store.FailNextCompareAndSwap(errors.New("storage backend leaked detail"))
+		"backend ambiguity": func(_ *recordingCoordinator, store *observingStore) {
+			store.failNextCompareAndSwap(errors.New("storage backend leaked detail"))
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			store := session.NewMemoryStore()
-			revocations := session.NewMemoryRevocationStore()
-			coordinator := &recordingCoordinator{}
-			manager := newTestManager(t, store, revocations, coordinator, session.Options{
-				Random: &lockedReader{chunks: [][]byte{bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 32), bytes.Repeat([]byte{3}, 32)}},
-				Clock:  func() time.Time { return now },
-			})
-			created, token, err := manager.Create(context.Background(), validPrincipal(now), session.ClientInfo{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			setup(coordinator, store)
-			_, _, err = manager.Rotate(context.Background(), created.ID, token)
-			if err == nil {
-				t.Fatal("Rotate() succeeded, want fail closed")
-			}
-			if errors.Is(err, coordination.ErrLeaseLost) || errors.Is(err, context.Canceled) || errors.Is(err, authentication.ErrReplay) {
+			synctest.Test(t, func(t *testing.T) {
+				now := time.Now().UTC()
+				coordinator := &recordingCoordinator{}
+				store := newObservingStore(coordinator)
+				revocations := session.NewMemoryRevocationStore()
+				manager := newTestManager(t, store, revocations, coordinator, session.Options{
+					Random: &lockedReader{chunks: [][]byte{bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 32), bytes.Repeat([]byte{3}, 32)}},
+				})
+				created, token, err := manager.Create(context.Background(), validPrincipal(now), session.ClientInfo{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				setup(coordinator, store)
+				_, _, err = manager.Rotate(context.Background(), created.ID, token)
+				if err == nil {
+					t.Fatal("Rotate() succeeded, want fail closed")
+				}
+				if errors.Is(err, coordination.ErrLeaseLost) || errors.Is(err, context.Canceled) || errors.Is(err, authentication.ErrReplay) {
+					if name == "release failure" && coordinator.releaseCount("auth/session/"+created.ID) != 1 {
+						t.Fatalf("Release called %d times, want exactly once", coordinator.releaseCount("auth/session/"+created.ID))
+					}
+					return
+				}
+				if !errors.Is(err, authentication.ErrUnauthenticated) {
+					t.Fatalf("Rotate() error = %v, want sanitized fail-closed error", err)
+				}
 				if name == "release failure" && coordinator.releaseCount("auth/session/"+created.ID) != 1 {
 					t.Fatalf("Release called %d times, want exactly once", coordinator.releaseCount("auth/session/"+created.ID))
 				}
-				return
-			}
-			if !errors.Is(err, authentication.ErrUnauthenticated) {
-				t.Fatalf("Rotate() error = %v, want sanitized fail-closed error", err)
-			}
-			if name == "release failure" && coordinator.releaseCount("auth/session/"+created.ID) != 1 {
-				t.Fatalf("Release called %d times, want exactly once", coordinator.releaseCount("auth/session/"+created.ID))
-			}
+			})
 		})
 	}
 }
 
 func TestValidateAndRotateRejectCorruptDurableRecords(t *testing.T) {
-	now := time.Unix(1350, 0).UTC()
 	token := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))
-	base := session.Session{
-		ID:            "sess_" + base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{3}, 32)),
-		Version:       1,
-		Principal:     validPrincipal(now),
-		CreatedAt:     now,
-		ExpiresAt:     now.Add(time.Hour),
-		LastSeenAt:    now,
-		RefreshDigest: sha256.Sum256([]byte(token)),
-		Rotation:      0,
-		Client:        session.ClientInfo{UserAgent: "browser"},
+	baseAt := func(now time.Time) session.Session {
+		return session.Session{
+			ID:            "sess_" + base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{3}, 32)),
+			Version:       1,
+			Principal:     validPrincipal(now),
+			CreatedAt:     now,
+			ExpiresAt:     now.Add(time.Hour),
+			LastSeenAt:    now,
+			RefreshDigest: sha256.Sum256([]byte(token)),
+			Rotation:      0,
+			Client:        session.ClientInfo{UserAgent: "browser"},
+		}
 	}
 	cases := map[string]func(session.Session) session.Session{
 		"id mismatch": func(s session.Session) session.Session {
@@ -254,7 +258,7 @@ func TestValidateAndRotateRejectCorruptDurableRecords(t *testing.T) {
 			return s
 		},
 		"non utc created": func(s session.Session) session.Session {
-			s.CreatedAt = time.Unix(1350, 0)
+			s.CreatedAt = s.CreatedAt.In(time.FixedZone("offset", 3600))
 			return s
 		},
 		"last seen before created": func(s session.Session) session.Session {
@@ -269,77 +273,87 @@ func TestValidateAndRotateRejectCorruptDurableRecords(t *testing.T) {
 
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
-			store := &corruptStore{session: mutate(base)}
-			coordinator := &recordingCoordinator{}
-			manager := newTestManager(t, store, session.NewMemoryRevocationStore(), coordinator, session.Options{
-				Random: &lockedReader{chunks: [][]byte{bytes.Repeat([]byte{5}, 32)}},
-				Clock:  func() time.Time { return now },
+			synctest.Test(t, func(t *testing.T) {
+				now := time.Now().UTC()
+				base := baseAt(now)
+				store := &corruptStore{session: mutate(base)}
+				coordinator := &recordingCoordinator{}
+				manager := newTestManager(t, store, session.NewMemoryRevocationStore(), coordinator, session.Options{
+					Random: &lockedReader{chunks: [][]byte{bytes.Repeat([]byte{5}, 32)}},
+				})
+				if _, err := manager.Validate(context.Background(), base.ID); !errors.Is(err, authentication.ErrInvalidCredential) {
+					t.Fatalf("Validate() error = %v, want ErrInvalidCredential", err)
+				}
+				if _, _, err := manager.Rotate(context.Background(), base.ID, token); !errors.Is(err, authentication.ErrInvalidCredential) {
+					t.Fatalf("Rotate() error = %v, want ErrInvalidCredential", err)
+				}
 			})
-			if _, err := manager.Validate(context.Background(), base.ID); !errors.Is(err, authentication.ErrInvalidCredential) {
-				t.Fatalf("Validate() error = %v, want ErrInvalidCredential", err)
-			}
-			if _, _, err := manager.Rotate(context.Background(), base.ID, token); !errors.Is(err, authentication.ErrInvalidCredential) {
-				t.Fatalf("Rotate() error = %v, want ErrInvalidCredential", err)
-			}
 		})
 	}
 }
 
 func TestValidateAndRotateCheckDurableRevocationAndExpiry(t *testing.T) {
-	now := time.Unix(1400, 0).UTC()
-	store := session.NewMemoryStore()
-	revocations := session.NewMemoryRevocationStore()
-	clockNow := now
-	manager := newTestManager(t, store, revocations, &recordingCoordinator{}, session.Options{
-		Random: &lockedReader{chunks: [][]byte{
-			bytes.Repeat([]byte{1}, 32),
-			bytes.Repeat([]byte{2}, 32),
-			bytes.Repeat([]byte{3}, 32),
-			bytes.Repeat([]byte{4}, 32),
-			bytes.Repeat([]byte{5}, 32),
-			bytes.Repeat([]byte{6}, 32),
-		}},
-		Clock: func() time.Time { return clockNow },
+	synctest.Test(t, func(t *testing.T) {
+		now := time.Now().UTC()
+		store := session.NewMemoryStore()
+		revocations := session.NewMemoryRevocationStore()
+		manager := newTestManager(t, store, revocations, &recordingCoordinator{}, session.Options{
+			Random: &lockedReader{chunks: [][]byte{
+				bytes.Repeat([]byte{1}, 32),
+				bytes.Repeat([]byte{2}, 32),
+				bytes.Repeat([]byte{3}, 32),
+				bytes.Repeat([]byte{4}, 32),
+				bytes.Repeat([]byte{5}, 32),
+				bytes.Repeat([]byte{6}, 32),
+			}},
+		})
+		created, token, err := manager.Create(context.Background(), validPrincipal(now), session.ClientInfo{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := manager.Validate(context.Background(), created.ID); err != nil {
+			t.Fatalf("Validate() error = %v", err)
+		}
+		if err := manager.Revoke(context.Background(), created.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := manager.Validate(context.Background(), created.ID); !errors.Is(err, authentication.ErrUnauthenticated) {
+			t.Fatalf("Validate(revoked) error = %v", err)
+		}
+		if _, _, err := manager.Rotate(context.Background(), created.ID, token); !errors.Is(err, authentication.ErrUnauthenticated) {
+			t.Fatalf("Rotate(revoked) error = %v", err)
+		}
+
+		created, token, err = manager.Create(context.Background(), validPrincipal(now), session.ClientInfo{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := manager.RevokePrincipal(context.Background(), created.Principal.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := manager.Validate(context.Background(), created.ID); !errors.Is(err, authentication.ErrUnauthenticated) {
+			t.Fatalf("Validate(principal revoked) error = %v", err)
+		}
+		if _, _, err := manager.Rotate(context.Background(), created.ID, token); !errors.Is(err, authentication.ErrUnauthenticated) {
+			t.Fatalf("Rotate(principal revoked) error = %v", err)
+		}
+
+		// A principal that is not revoked, so only the session lifetime applies.
+		other := validPrincipal(now)
+		other.ID = "principal-2"
+		created, _, err = manager.Create(context.Background(), other, session.ClientInfo{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Hour - time.Nanosecond)
+		if _, err := manager.Validate(context.Background(), created.ID); err != nil {
+			t.Fatalf("Validate(last valid instant) error = %v", err)
+		}
+		time.Sleep(time.Nanosecond)
+		if _, err := manager.Validate(context.Background(), created.ID); !errors.Is(err, authentication.ErrExpired) {
+			t.Fatalf("Validate(expired) error = %v", err)
+		}
 	})
-	created, token, err := manager.Create(context.Background(), validPrincipal(now), session.ClientInfo{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := manager.Validate(context.Background(), created.ID); err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if err := manager.Revoke(context.Background(), created.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := manager.Validate(context.Background(), created.ID); !errors.Is(err, authentication.ErrUnauthenticated) {
-		t.Fatalf("Validate(revoked) error = %v", err)
-	}
-	if _, _, err := manager.Rotate(context.Background(), created.ID, token); !errors.Is(err, authentication.ErrUnauthenticated) {
-		t.Fatalf("Rotate(revoked) error = %v", err)
-	}
-
-	created, token, err = manager.Create(context.Background(), validPrincipal(now), session.ClientInfo{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.RevokePrincipal(context.Background(), created.Principal.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := manager.Validate(context.Background(), created.ID); !errors.Is(err, authentication.ErrUnauthenticated) {
-		t.Fatalf("Validate(principal revoked) error = %v", err)
-	}
-	if _, _, err := manager.Rotate(context.Background(), created.ID, token); !errors.Is(err, authentication.ErrUnauthenticated) {
-		t.Fatalf("Rotate(principal revoked) error = %v", err)
-	}
-
-	created, _, err = manager.Create(context.Background(), validPrincipal(now), session.ClientInfo{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	clockNow = now.Add(time.Hour)
-	if _, err := manager.Validate(context.Background(), created.ID); !errors.Is(err, authentication.ErrExpired) {
-		t.Fatalf("Validate(expired) error = %v", err)
-	}
 }
 
 func TestSessionStoresAreConcurrencySafeAndFenced(t *testing.T) {
@@ -496,9 +510,6 @@ func newTestManager(t *testing.T, store session.Store, revocations session.Revoc
 	}
 	if overrides.Random != nil {
 		options.Random = overrides.Random
-	}
-	if overrides.Clock != nil {
-		options.Clock = overrides.Clock
 	}
 	if overrides.ManagerID != "" {
 		options.ManagerID = overrides.ManagerID

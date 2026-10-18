@@ -4,7 +4,6 @@ import (
 	"context"
 	"reflect"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -38,6 +37,12 @@ type Session struct {
 }
 
 // Store is the durable, authoritative session store.
+//
+// Create must fail with authentication.ErrReplay for an existing ID.
+// CompareAndSwap(ctx, id, expectedVersion, fence, next) must replace the
+// session only when its current version equals expectedVersion (otherwise
+// authentication.ErrReplay) and fence is greater than the fence of the last
+// successful swap (otherwise coordination.ErrLeaseLost), atomically.
 type Store interface {
 	Create(context.Context, Session) error
 	Get(context.Context, string) (Session, error)
@@ -58,13 +63,12 @@ type storedSession struct {
 	fence   uint64
 }
 
-// MemoryStore is a concurrency-safe durable-store implementation for tests and
-// local process use.
+// MemoryStore is a concurrency-safe, process-local Store for tests and
+// single-process callers. Distributed deployments should provide a durable
+// implementation.
 type MemoryStore struct {
-	mu                     sync.Mutex
-	sessions               map[string]storedSession
-	failNextCAS            error
-	observedGetWhileLocked atomic.Bool
+	mu       sync.Mutex
+	sessions map[string]storedSession
 }
 
 // NewMemoryStore returns an empty memory-backed session store.
@@ -97,9 +101,6 @@ func (s *MemoryStore) Get(ctx context.Context, id string) (Session, error) {
 	if invalidText(id, maxSessionIDBytes) {
 		return Session{}, authentication.ErrInvalidCredential
 	}
-	if ctx.Value(leaseHeldContextKey{}) == true {
-		s.observedGetWhileLocked.Store(true)
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	stored, ok := s.sessions[id]
@@ -123,11 +124,6 @@ func (s *MemoryStore) CompareAndSwap(ctx context.Context, id string, expectedVer
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.failNextCAS != nil {
-		err := s.failNextCAS
-		s.failNextCAS = nil
-		return err
-	}
 	stored, ok := s.sessions[id]
 	if !ok {
 		return authentication.ErrUnauthenticated
@@ -162,19 +158,6 @@ func (s *MemoryStore) ListByPrincipal(ctx context.Context, principalID string) (
 		}
 	}
 	return out, nil
-}
-
-// FailNextCompareAndSwap injects the next CAS error for store contract tests.
-func (s *MemoryStore) FailNextCompareAndSwap(err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.failNextCAS = err
-}
-
-// ObservedGetWhileLocked reports whether Get was called from the manager's
-// lease-protected path.
-func (s *MemoryStore) ObservedGetWhileLocked() bool {
-	return s.observedGetWhileLocked.Load()
 }
 
 // MemoryRevocationStore is a concurrency-safe revocation tombstone store.
@@ -320,5 +303,3 @@ func containsNUL(value string) bool {
 	}
 	return false
 }
-
-type leaseHeldContextKey struct{}

@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/justusschock/go-auth/authentication/session"
 	coordination "github.com/justusschock/go-distributed-coordination"
 )
 
@@ -18,6 +19,14 @@ type recordingCoordinator struct {
 	nextToken         coordination.FencingToken
 	held              map[string]bool
 	releases          map[string]int
+	released          chan struct{} // closed and replaced on every release
+}
+
+// isHeld reports whether a lease on key is currently held.
+func (c *recordingCoordinator) isHeld(key string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.held[key]
 }
 
 func (c *recordingCoordinator) Acquire(ctx context.Context, request coordination.AcquireRequest) (coordination.Lease, error) {
@@ -40,12 +49,16 @@ func (c *recordingCoordinator) Acquire(ctx context.Context, request coordination
 		if !request.Wait {
 			return nil, coordination.ErrLeaseLost
 		}
+		if c.released == nil {
+			c.released = make(chan struct{})
+		}
+		released := c.released
 		c.mu.Unlock()
 		select {
 		case <-ctx.Done():
 			c.mu.Lock()
 			return nil, ctx.Err()
-		case <-time.After(time.Millisecond):
+		case <-released:
 			c.mu.Lock()
 		}
 	}
@@ -108,6 +121,10 @@ func (l *recordingLease) Release(context.Context) error {
 	l.coordinator.releases[l.key]++
 	if l.releaseErr == nil {
 		l.coordinator.held[l.key] = false
+		if l.coordinator.released != nil {
+			close(l.coordinator.released)
+			l.coordinator.released = nil
+		}
 	}
 	l.coordinator.mu.Unlock()
 	if l.releaseErr != nil {
@@ -126,4 +143,45 @@ func closeOnce(ch chan struct{}) {
 	}
 }
 
-var _ = atomic.Int32{}
+// observingStore wraps MemoryStore to inject CompareAndSwap failures and to
+// record whether Get runs while the session's rotation lease is held.
+type observingStore struct {
+	*session.MemoryStore
+	coordinator *recordingCoordinator
+
+	mu              sync.Mutex
+	failNextCAS     error
+	getsWithLease   atomic.Int32
+	getsWithoutLock atomic.Int32
+}
+
+func newObservingStore(coordinator *recordingCoordinator) *observingStore {
+	return &observingStore{MemoryStore: session.NewMemoryStore(), coordinator: coordinator}
+}
+
+func (s *observingStore) Get(ctx context.Context, id string) (session.Session, error) {
+	if s.coordinator != nil && s.coordinator.isHeld("auth/session/"+id) {
+		s.getsWithLease.Add(1)
+	} else {
+		s.getsWithoutLock.Add(1)
+	}
+	return s.MemoryStore.Get(ctx, id)
+}
+
+func (s *observingStore) CompareAndSwap(ctx context.Context, id string, expectedVersion, fence uint64, next session.Session) error {
+	s.mu.Lock()
+	err := s.failNextCAS
+	s.failNextCAS = nil
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return s.MemoryStore.CompareAndSwap(ctx, id, expectedVersion, fence, next)
+}
+
+// failNextCompareAndSwap makes the next CompareAndSwap return err.
+func (s *observingStore) failNextCompareAndSwap(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failNextCAS = err
+}
