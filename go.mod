@@ -20,6 +20,6 @@ require (
 	github.com/jonboulle/clockwork v0.2.2 // indirect
 	github.com/justusschock/concurrency v0.1.0 // indirect
 	github.com/justusschock/messaging v0.1.0 // indirect
-	golang.org/x/crypto v0.33.0 // indirect
+	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/exp v0.0.0-20220921023135-46d9e7742f1e // indirect
 )
