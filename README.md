@@ -1,135 +1,199 @@
 # go-auth
 
-Composable authentication and Cedar-based authorization for OIDC, OAuth2, SAML, JWT, SSO, and magic links.
+go-auth is a set of small, independently importable Go packages for
+authenticating users and services (JWT, OpenID Connect, OAuth 2.0, SAML 2.0,
+API tokens, magic links, device authorization, server-side sessions) and for
+authorizing requests with [Cedar](https://www.cedarpolicy.com/) policies. It is
+for Go services and CLIs that want strict, fail-closed building blocks behind
+protocol-neutral interfaces instead of a framework.
 
-> **Status:** Initial implementation is available.
+## Features
 
-Module path: `github.com/justusschock/go-auth`
+- **Protocol-neutral contracts**: `authentication.Credential`, `Principal`,
+  `Authenticator`, `FederatedProvider`, `Chain` and request-context helpers;
+  `authorization.Request`, `Decision` and `Authorizer`. Authentication and
+  authorization do not import each other.
+- **JWT verification** with required issuer, audience, algorithm allowlist,
+  key IDs, maximum lifetime and explicit clock skew.
+- **API tokens** (`<prefix>_<id>_<secret>`, 256-bit secrets) stored only as
+  SHA-256 or peppered HMAC-SHA256 digests, compared in constant time, with
+  scopes, expiry, revocation and throttled last-used tracking.
+- **HTTP middleware** (standard library only) with RFC 6750 challenges, and an
+  `Authorization` header parser for other transports such as gRPC.
+- **Federated login**: OpenID Connect and OAuth 2.0 authorization code flow
+  with PKCE, nonce and single-use hashed state; SAML 2.0 service provider with
+  signed requests and strict response validation; SSO provider selection by
+  name or e-mail domain; cached provider metadata.
+- **Single-use magic links** with bounded TTLs and exact redirect URIs.
+- **Device authorization grant** (RFC 8628) client for command-line tools.
+- **Durable sessions** with rotating refresh tokens, replay detection under a
+  distributed lease, and session and principal revocation.
+- **Cedar authorization** with request-scoped entities, bounded inputs and
+  default-deny on any evaluation error.
 
-## Scope
+## Installation
 
-Independently importable authentication and authorization packages with identities, sessions, OIDC, OAuth2, SAML, JWT, magic links, Cedar policies, and revocation.
+```sh
+go get github.com/justusschock/go-auth@latest
+```
 
-This library is private and intended for reuse by future Go projects.
+Requires Go 1.26 or later.
 
-## Target platform dependencies
+## Quick start
 
-Required imports:
-
-- [`go-cache`](https://github.com/justusschock/go-cache)
-- [`go-distributed-coordination`](https://github.com/justusschock/go-distributed-coordination)
-
-Optional adapter imports:
-
-None currently planned.
-
-Optional integrations must remain one-way: concrete adapters import their neutral contracts, never the reverse.
-
-## Design constraints
-
-- Keep public contracts independent of product-specific resource types.
-- Keep the dependency graph acyclic; imports point toward lower-level mechanisms.
-- Put generic lifecycle transfer in `go-lifecycle/handoff` and finite resource-right transfer in `go-resources/handoff`.
-- Use `go-cache` only for reconstructible, disposable state, never correctness-critical state.
-
-## Composing authenticators
-
-`authentication.Chain(a, b, ...)` tries authenticators in order. An
-authenticator that does not handle a credential returns
-`authentication.ErrUnsupportedCredential` and the next one is tried; the first
-other result (success or failure) wins, so a recognized but invalid credential
-never falls through. `authentication.ContextWithPrincipal` and
-`authentication.PrincipalFromContext` carry the authenticated principal
-through request contexts. `jwt.Verifier` rejects foreign kinds with
-`ErrUnauthenticated`, so place it last in a chain.
-
-## API tokens
-
-`authentication/apitoken` issues personal and service tokens of the form
-`<prefix>_<id>_<secret>` (for example `dtc_<26 chars>_<52 chars>`). The ID is
-128 random bits and the secret 256 random bits from `crypto/rand`, both
-lowercase base32 without padding.
-
-- Only a digest of the whole token is stored: HMAC-SHA256 keyed with
-  `Options.Pepper` (32-1024 bytes, kept outside the token database) or, without
-  a pepper, SHA-256. The 256-bit secret makes an unpeppered digest infeasible to
-  brute-force; the pepper additionally keeps a leaked database from confirming
-  tokens. Rotating the pepper invalidates every token.
-- Digests are compared with `crypto/subtle` before revocation or expiry are
-  inspected, and errors never contain token material.
-- `Manager` implements `authentication.Authenticator` for credentials of kind
-  `apitoken` or `bearer` with its prefix, and returns
-  `ErrUnsupportedCredential` for everything else. The rebuilt principal carries
-  the issuing identity, `Methods: ["apitoken"]`, and the traits
-  `apitoken.ScopeTrait` (`"scope"`) and `apitoken.TokenIDTrait`.
-- `Store` is the persistence contract; `MemoryStore` is for tests and
-  single-process use. Last-used updates are throttled and best effort.
+Authenticate a JWT and authorize the principal with a Cedar policy (from
+[`example_test.go`](example_test.go)):
 
 ```go
-manager, _ := apitoken.NewManager(apitoken.Options{Store: store, Prefix: "dtc", Pepper: pepper})
-token, record, _ := manager.Issue(ctx, apitoken.IssueRequest{
-	Principal: apitoken.IdentityFromPrincipal(user),
-	Name:      "ci",
-	Scopes:    []string{"runs:write"},
-	TTL:       90 * 24 * time.Hour,
+ctx := context.Background()
+key := []byte("example-key-with-at-least-32-bytes")
+
+// Authentication: a strict JWT verifier.
+verifier, err := authjwt.NewVerifier(authjwt.Options{
+	Issuer:      "https://issuer.example",
+	Audiences:   []string{"example-api"},
+	Algorithms:  []string{"HS256"},
+	Keys:        exampleKeys{key: key},
+	ClockSkew:   time.Minute,
+	MaxLifetime: 15 * time.Minute,
 })
+if err != nil {
+	panic(err)
+}
+
+// A token as an identity provider would issue it.
+now := time.Now()
+token := jwtlib.NewWithClaims(jwtlib.SigningMethodHS256, jwtlib.MapClaims{
+	"iss": "https://issuer.example",
+	"sub": "alice",
+	"aud": []string{"example-api"},
+	"iat": now.Add(-time.Minute).Unix(),
+	"exp": now.Add(5 * time.Minute).Unix(),
+})
+token.Header["kid"] = "example-key"
+signed, err := token.SignedString(key)
+if err != nil {
+	panic(err)
+}
+
+principal, err := verifier.Authenticate(ctx, authentication.Credential{
+	Kind:  authentication.CredentialKindJWT,
+	Token: []byte(signed),
+})
+if err != nil {
+	panic(err)
+}
+fmt.Println("authenticated:", principal.ID)
+
+// Authorization: Cedar policies evaluated per request, default deny.
+engine, err := authcedar.New(authcedar.Options{
+	Policies: examplePolicies(`permit(principal == User::"alice", action == Action::"read", resource);`),
+	Entities: exampleEntities{},
+})
+if err != nil {
+	panic(err)
+}
+for _, action := range []string{"read", "delete"} {
+	decision, err := engine.Authorize(ctx, authorization.Request{
+		Principal: authorization.Entity{Type: "User", ID: principal.Subject},
+		Action:    authorization.Entity{Type: "Action", ID: action},
+		Resource:  authorization.Entity{Type: "Document", ID: "report"},
+	})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("%s allowed: %v\n", action, decision.Allowed)
+}
+// Output:
+// authenticated: https://issuer.example|alice
+// read allowed: true
+// delete allowed: false
 ```
 
-## HTTP middleware
+`exampleKeys`, `examplePolicies` and `exampleEntities` are three-line
+implementations of `jwt.KeySource`, `authorization.PolicySource` and
+`authorization.EntitySource`; see the example file. More runnable examples live
+next to the packages (for example `apitoken.ExampleManager` and
+`middleware.ExampleHTTP`).
 
-`authentication/middleware` depends only on the standard library and the
-authentication contracts.
+Composing authenticators for an HTTP API:
 
 ```go
-auth := authentication.Chain(apiTokens, jwtVerifier)
-handler := middleware.HTTP(mux, auth, middleware.WithRealm("dtc"))
+tokens, _ := apitoken.NewManager(apitoken.Options{Store: store, Prefix: "app", Pepper: pepper})
+handler := middleware.HTTP(mux, authentication.Chain(tokens, jwtVerifier), middleware.WithRealm("app"))
 ```
 
-`HTTP` reads one `Authorization: Bearer` header (or, with `WithCookie`, one
-cookie), answers 401/400 with an RFC 6750 `WWW-Authenticate` challenge and a
-generic body, and stores the principal in the request context. `WithAnonymous`
-lets requests without any credential through. Cookie authentication requires
-CSRF protection by the caller.
+`Chain` tries authenticators in order; one that does not recognise a credential
+returns `authentication.ErrUnsupportedCredential` and the next is tried, while
+any other result wins, so a recognised but invalid credential never falls
+through. `jwt.Verifier` rejects every non-JWT credential, so place it last.
 
-`middleware.CredentialFromAuthorizationHeader` parses the same header value for
-other transports such as gRPC `authorization` metadata. JWS-shaped tokens get
-kind `jwt`, everything else kind `bearer`.
+## Packages
 
-## Device authorization for CLIs
+Module path: `github.com/justusschock/go-auth`. The module root has no Go
+package; import the packages below.
 
-`authentication/device` is an RFC 8628 client built on `golang.org/x/oauth2`:
+| Package | Purpose |
+|---|---|
+| `authentication` | Credential, Principal, Authenticator, FederatedProvider contracts; `Chain`; principal context helpers; sentinel errors |
+| `authentication/jwt` | Strict signed-JWT `Verifier` |
+| `authentication/apitoken` | Long-lived API tokens: `Manager`, `Store` contract, `MemoryStore` |
+| `authentication/middleware` | `net/http` middleware and `Authorization` header parser (standard library only) |
+| `authentication/oidc` | OpenID Connect authorization code + PKCE provider; shared callback state types (`StateStore`, `Pending`, `Secret`) |
+| `authentication/oauth2` | Plain OAuth 2.0 authorization code + PKCE provider with a required user-info mapper |
+| `authentication/saml` | SAML 2.0 service provider (SP-initiated, HTTP-Redirect request, HTTP-POST response) |
+| `authentication/sso` | Provider selection by name or e-mail domain |
+| `authentication/metadata` | Validated provider metadata cache on top of go-cache |
+| `authentication/magiclink` | Single-use magic links |
+| `authentication/device` | OAuth 2.0 device authorization grant (RFC 8628) client |
+| `authentication/session` | Durable sessions with lease-protected refresh-token rotation and revocation |
+| `authorization` | Request, Decision, Authorizer and policy/entity source contracts |
+| `authorization/cedar` | Cedar `Engine` |
 
-```go
-client, _ := device.New(ctx, device.Options{Issuer: issuer, ClientID: "dtc-cli", Scopes: []string{"offline_access"}})
-authorization, _ := client.Start(ctx)
-fmt.Printf("Open %s and enter %s\n", authorization.VerificationURI, authorization.UserCode)
-token, idToken, err := client.Poll(ctx, authorization)
-```
+Packages under `internal/` are not part of the API and may change at any time.
 
-`Poll` keeps waiting on `authorization_pending`, waits 5 seconds longer after
-`slow_down`, and maps `expired_token` (or reaching the expiry) to
-`authentication.ErrExpired` and `access_denied` to `device.ErrAccessDenied`.
-Server-provided codes and URIs are validated as printable ASCII and https (or
-loopback http) before they are shown. The ID token is returned unverified; the
-receiving server must verify it.
+## Design and guarantees
 
-## Development
+- **Fail closed.** Every malformed, ambiguous, oversized or unverifiable input
+  is rejected. Verification failures surface as a few sentinel errors
+  (`authentication.ErrUnauthenticated`, `ErrExpired`, `ErrReplay`, ...;
+  `authorization.ErrInvalidRequest`, ...) that never contain credential
+  material or backend detail; test them with `errors.Is`. A non-nil
+  authorization error always means "not allowed".
+- **Secrets.** Tokens, refresh tokens, magic links and callback state are
+  generated from `crypto/rand` (256 bits) and stored only as digests; secrets
+  that must be stored (nonce, PKCE verifier, device code) are wrapped in a
+  redacting `oidc.Secret`. Presented API and refresh tokens are compared in
+  constant time. See [SECURITY.md](SECURITY.md).
+- **Time.** Expiry is checked against `time.Now`; clock skew is explicit and
+  bounded per protocol, and one-time state is consumed before it is checked so
+  an expired or invalid value cannot be retried.
+- **Concurrency.** Authenticators, providers and in-memory stores are safe for
+  concurrent use (given concurrency-safe stores you supply). Single-use state
+  relies on atomic `Consume` in the store contracts; session rotation is
+  serialized by a [go-distributed-coordination](https://github.com/justusschock/go-distributed-coordination)
+  lease and a fenced compare-and-swap. Blocking operations take a
+  `context.Context` and honour cancellation.
+- **Storage is yours.** Each stateful package defines a small `Store`
+  interface and ships a process-local `Memory*` implementation for tests and
+  single-process use; production deployments plug in a durable store.
+- **Stability.** The module is `v0.x`: minor releases may break the API. Every
+  break is listed in [CHANGELOG.md](CHANGELOG.md).
 
-Install and run the repository hooks:
+## Documentation
 
-```bash
-pre-commit install
-pre-commit run --all-files
-```
+- [docs/README.md](docs/README.md): the product requirements (PRD) and
+  architecture decision records (ADRs), including the security model.
+- API reference on [pkg.go.dev](https://pkg.go.dev/github.com/justusschock/go-auth).
 
-Once the module implementation exists, run its Go checks with:
+## Contributing
 
-```bash
-go test ./...
-```
-
-Local implementation plans live under `docs/` and are intentionally excluded from Git.
+Contributions are welcome through pull requests; nothing is pushed to `main`
+directly. Read [AGENTS.md](AGENTS.md) first: it holds the rules for every
+change (docs first, public API policy, testing with `testing/synctest`, and the
+checks to run). Report vulnerabilities privately as described in
+[SECURITY.md](SECURITY.md), never in a public issue.
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE).
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
