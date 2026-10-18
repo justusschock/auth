@@ -84,9 +84,9 @@ func Example() {
 	}
 	for _, action := range []string{"read", "delete"} {
 		decision, err := engine.Authorize(ctx, authorization.Request{
-			Principal: authorization.Entity{Type: "User", ID: principal.Subject},
-			Action:    authorization.Entity{Type: "Action", ID: action},
-			Resource:  authorization.Entity{Type: "Document", ID: "report"},
+			Principal: authorization.Principal{Type: "User", ID: principal.Subject},
+			Action:    authorization.Action{ID: action},
+			Resource:  authorization.Resource{Type: "Document", ID: "report"},
 		})
 		if err != nil {
 			panic(err)

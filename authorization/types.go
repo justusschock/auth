@@ -10,17 +10,33 @@ package authorization
 
 import "context"
 
-// Entity identifies one Cedar principal, action, or resource.
-type Entity struct {
+// Principal identifies who makes a request, for example the Cedar entity
+// User::"alice": Type "User", ID "alice". Type is a Cedar entity type such as
+// "User" or "App::User"; ID is any non-empty UTF-8 string.
+type Principal struct {
+	Type string
+	ID   string
+}
+
+// Action identifies what the principal wants to do, for example "read". Its
+// Cedar entity type is always Action, so Action{ID: "read"} is the Cedar
+// entity Action::"read".
+type Action struct {
+	ID string
+}
+
+// Resource identifies what the action applies to, for example
+// Document::"report": Type "Document", ID "report".
+type Resource struct {
 	Type string
 	ID   string
 }
 
 // Request contains only authorization inputs. It is independent of authentication.
 type Request struct {
-	Principal Entity
-	Action    Entity
-	Resource  Entity
+	Principal Principal
+	Action    Action
+	Resource  Resource
 	Context   map[string]any
 }
 
