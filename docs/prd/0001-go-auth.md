@@ -1,0 +1,209 @@
+# PRD 0001: go-auth authentication and authorization library
+
+| Field | Value |
+|---|---|
+| Status | Accepted |
+| Implementation | Complete |
+| Owners | Justus Perillieux |
+| Related ADRs | ADR-0002, ADR-0003, ADR-0004, ADR-0005, ADR-0006, ADR-0007, ADR-0008, ADR-0009, ADR-0010, ADR-0011 |
+| Last updated | 2026-10-18 |
+
+Recorded retrospectively for the first public release; describes the library
+as implemented.
+
+## 1. Problem and context
+
+Go services and command-line tools need to authenticate callers with several
+protocols at once (bearer JWTs from an identity provider, long-lived API
+tokens for automation, browser logins through OIDC, OAuth 2.0 or SAML, magic
+links, device authorization for CLIs) and then decide what an authenticated
+caller may do. Each protocol has many ways to get verification subtly wrong:
+missing audience or algorithm checks, unbounded clock skew, reusable state,
+secrets in logs, timing leaks, XML signature wrapping. Frameworks that bundle
+everything are large, couple applications to their lifecycle and link every
+protocol's dependencies.
+
+go-auth provides small, strict, independently importable packages behind
+protocol-neutral contracts, plus Cedar-based authorization that does not
+depend on how the caller authenticated.
+
+## 2. Users and use cases
+
+- As an **API developer**, I want to verify bearer JWTs from my identity
+  provider with explicit issuer, audience, algorithms and skew so that
+  forged, foreign or stale tokens are rejected.
+- As an **API developer**, I want to issue scoped, expiring, revocable API
+  tokens whose database leak is harmless so that automation can authenticate
+  without user sessions.
+- As an **API developer**, I want one HTTP middleware that tries API tokens
+  and JWTs in order and stores the principal in the request context.
+- As a **web application developer**, I want OIDC, OAuth 2.0 and SAML login
+  flows with single-use state, PKCE and strict response validation, and to
+  pick the provider from the user's e-mail domain.
+- As a **web application developer**, I want passwordless magic links that
+  work once and expire quickly.
+- As a **CLI developer**, I want the RFC 8628 device flow so users can log in
+  from a terminal without a browser on the same machine.
+- As a **platform developer**, I want durable sessions with refresh-token
+  rotation that detects token reuse across multiple server instances, and
+  revocation of a session or all sessions of a user.
+- As a **service owner**, I want authorization decisions from Cedar policies
+  and request-scoped entities, denying on any ambiguity.
+- As a **library implementer**, I want small store interfaces so I can back
+  tokens, sessions and state with my own database.
+
+## 3. Goals and non-goals
+
+### Goals
+- G1: Protocol-neutral `Credential`/`Principal`/`Authenticator` and
+  `Request`/`Decision`/`Authorizer` contracts, independent of each other.
+- G2: Strict, fail-closed verification for each supported protocol with
+  sanitized errors.
+- G3: Secrets generated securely, stored only as digests, compared in
+  constant time.
+- G4: Precise, bounded expiry, TTL and clock-skew rules.
+- G5: Single-use guarantees and safe rotation under concurrency, across
+  processes.
+- G6: Minimal, documented dependencies per package.
+
+### Non-goals
+- NG1: User management, passwords or multi-factor authentication (identity
+  providers own these).
+- NG2: Running an identity provider or authorization server.
+- NG3: Database adapters; stores are supplied by callers (ADR-0008).
+- NG4: IdP-initiated SAML, SAML encrypted assertions, SAML single logout.
+- NG5: CSRF protection for cookie authentication (the caller's
+  responsibility, documented in the middleware).
+- NG6: Logging or metrics inside the library.
+
+## 4. Functional requirements
+
+| ID | Requirement | Priority (MUST/SHOULD/MAY) |
+|---|---|---|
+| FR-AUTH-01 | `authentication` defines `Principal`, `Credential`, `BeginRequest`, `Redirect` and `Callback` with deep `Clone` methods, and `ValidatePrincipal(principal, now)` that requires identity fields, a UTC lifetime with `AuthenticatedAt <= now < ExpiresAt`, and bounded traits and unique methods, returning `ErrExpired` or `ErrInvalidPrincipal`. | MUST |
+| FR-AUTH-02 | `Chain` tries authenticators in order, skipping only `ErrUnsupportedCredential`, gives each a copy of the credential, fails closed on nil authenticators and honours cancellation; `ContextWithPrincipal`/`PrincipalFromContext` carry independent copies of a principal. | MUST |
+| FR-AUTH-03 | `jwt.Verifier` accepts only kind `jwt` tokens within a size bound, signed with a configured algorithm (never `none`), carrying a bounded `kid` resolved by a `KeySource`, the exact issuer, a configured audience without duplicates, `sub`, `iat` and `exp`, with `exp − iat ≤ MaxLifetime`; everything else returns `ErrUnauthenticated`. | MUST |
+| FR-AUTH-04 | The JWT verifier applies `ClockSkew` to `exp`, `nbf` and `iat`, and returns principals valid at verification time even when accepted within skew. | MUST |
+| FR-AUTH-05 | `apitoken.Manager` issues `<prefix>_<id>_<secret>` tokens (128-bit ID, 256-bit secret, canonical base32), returns the token once, stores only a SHA-256 or peppered HMAC-SHA256 digest, and authenticates by constant-time digest comparison, rejecting tampered or non-canonical tokens. | MUST |
+| FR-AUTH-06 | API tokens expire at `ExpiresAt` (`ErrExpired`), can be revoked and listed per principal (revocation keeps the first time), carry scopes and the token ID as traits, and update last-used time at most once per interval, best effort. | MUST |
+| FR-AUTH-07 | `apitoken.Manager` returns `ErrUnsupportedCredential` for foreign kinds or prefixes so it composes with `Chain`. | MUST |
+| FR-AUTH-08 | `middleware.HTTP` authenticates one `Authorization: Bearer` header or one configured cookie, stores the principal in the request context, optionally passes anonymous requests, and answers 400/401 with RFC 6750 challenges, `Cache-Control: no-store` and generic bodies; invalid configuration panics at construction. | MUST |
+| FR-AUTH-09 | `middleware.CredentialFromAuthorizationHeader` parses RFC 6750 bearer values (case-insensitive scheme, b64token, size bound), classifying JWS-shaped tokens as kind `jwt` and others as `bearer`. | MUST |
+| FR-AUTH-10 | `oidc.Provider` runs the authorization code flow with PKCE (S256), nonce and independent random state stored only as a digest; accepts only exact registered redirect URIs; consumes state once before the code exchange; verifies the ID token, issuer, audience, `azp` and nonce. | MUST |
+| FR-AUTH-11 | The OIDC provider copies only configured, verified string or string-array claims into traits, owns its configuration, and rejects malformed or unbounded claim configuration and values. | MUST |
+| FR-AUTH-12 | `oauth2.Provider` runs the plain OAuth 2.0 code flow with PKCE, does not force `openid`, requires a `UserInfoMapper` as the only identity source, and accepts https or loopback-http endpoints and redirects only. | MUST |
+| FR-AUTH-13 | OIDC and OAuth 2.0 callback state expires after `StateTTL` (default 10 minutes) with `ErrExpired`, without exchanging the code. | MUST |
+| FR-AUTH-14 | `saml.Provider` sends RSA-SHA256-signed AuthnRequests for the exact registered ACS URL, owns copies of its credentials and metadata, consumes the pending request before parsing, and accepts only responses signed (response or assertion) by the IdP with exactly one unencrypted assertion and matching destination, issuer, InResponseTo, audience and recipient. | MUST |
+| FR-AUTH-15 | SAML time checks apply `AllowedClockSkew` to conditions, subject confirmation and issue instants, reject bearer confirmations with `NotBefore` and future authentication instants, expire pending requests after 10 minutes, and do not depend on crewjam/saml's process-global clocks. | MUST |
+| FR-AUTH-16 | SAML responses are bounded before decoding and parsing (encoded and decoded size, XML depth and element count, RelayState length) and malformed XML is rejected. | MUST |
+| FR-AUTH-17 | `magiclink.Service` issues 256-bit base64url tokens stored only as SHA-256 digests, rejects malformed tokens before store access, and consumes a link atomically exactly once before validating expiry and principal. | MUST |
+| FR-AUTH-18 | Magic links require https base and exact registered https redirect URIs, have a TTL of at most 15 minutes, and expire exactly at `IssuedAt + TTL`. | MUST |
+| FR-AUTH-19 | `device.Client` implements RFC 8628: discovery or explicit endpoints, polling at the interval (default 5 s), +5 s after `slow_down`, `ErrExpired` at expiry or `expired_token`, `ErrAccessDenied` on denial, `*Error` for other OAuth errors, caller context errors as is, and optional HTTP Basic client authentication. | MUST |
+| FR-AUTH-20 | The device client validates its options and every server response (printable-ASCII codes, https or loopback verification URIs, expiry and interval bounds) before showing anything to the user. | MUST |
+| FR-AUTH-21 | `session.Manager` creates sessions with independent random IDs and refresh tokens (stored as digests), bounded lifetimes and client metadata, and validates them against expiry, principal validity, session and principal revocation, and record integrity. | MUST |
+| FR-AUTH-22 | Session refresh-token rotation runs under a coordination lease with a version- and fence-checked compare-and-swap so exactly one concurrent rotation wins and reuse is reported as `ErrReplay`; lease, store or release ambiguity fails closed. | MUST |
+| FR-AUTH-23 | `sso.Registry` selects a federated provider by normalized name or e-mail domain and rejects duplicate or ambiguous registrations. | MUST |
+| FR-AUTH-24 | `metadata.Cache` returns provider metadata whose issuer matches and whose endpoints are https, falling back to the loader on cache miss, error or invalid cached data. | MUST |
+| FR-AUTH-25 | `authorization` defines `Request`, `Entity`, `Decision`, `Authorizer`, `PolicySource` and `EntitySource`; `cedar.Engine` evaluates policies and request-scoped entities per request, default deny, honouring `forbid` and entity hierarchy, and denies with deterministic, sanitized diagnostics on evaluation errors. | MUST |
+| FR-AUTH-26 | The Cedar engine validates configuration, entity identifiers, bounded sources and context values, rejects duplicate entities and ambiguous context, passes entity sources a deep copy of the request, and honours cancellation. | MUST |
+
+## 5. Non-functional requirements
+
+| ID | Requirement | Measure |
+|---|---|---|
+| NFR-AUTH-01 | Errors never contain credential material or backend detail; verification failures use the fixed sentinels of ADR-0004. | Sanitization tests and fuzz targets assert no input appears in errors |
+| NFR-AUTH-02 | Secrets are stored only as digests or redacting `oidc.Secret` values and never appear in formatted output. | `TestPendingSecretsAreOpaqueRedactingAndPersistable`, `TestStateDigestUsesSHA256LookupOnly`, `TestStoreNeverHoldsRawTokenAndPepperBindsDigest` |
+| NFR-AUTH-03 | Presented API token digests are compared in constant time. | `TestDigestComparisonsAreConstantTime` (source inspection), `TestDigestsEqualIsExact` |
+| NFR-AUTH-04 | Failure of the randomness source fails closed without storing state. | `TestIssueFailsClosedOnRandomnessFailure`, `TestIssueHandlesRandomFailureAndContextCancellation`, `TestCreateRejectsInvalidBoundsAndRandomFailure` |
+| NFR-AUTH-05 | Authentication and authorization are independent; the middleware uses only the standard library; direct dependencies match ADR-0003. | `separation_test.go` |
+| NFR-AUTH-06 | All exported components are safe for concurrent use; tests pass with the race detector. | `go test -race -count=3 ./...` |
+| NFR-AUTH-07 | Values crossing the API are copied; callers cannot mutate library state or vice versa. | Clone and isolation tests |
+| NFR-AUTH-08 | Tests are deterministic and offline; time-dependent tests use `testing/synctest`. | ADR-0011; repeated runs |
+
+## 6. API sketch
+
+```go
+// authentication
+type Authenticator interface {
+	Authenticate(context.Context, Credential) (Principal, error)
+}
+type FederatedProvider interface {
+	Name() string
+	Begin(context.Context, BeginRequest) (Redirect, error)
+	Complete(context.Context, Callback) (Principal, error)
+}
+func Chain(authenticators ...Authenticator) Authenticator
+
+// authentication/jwt
+func NewVerifier(Options) (*Verifier, error)
+
+// authentication/apitoken
+func NewManager(Options) (*Manager, error)
+func (*Manager) Issue(context.Context, IssueRequest) (token string, record Record, err error)
+
+// authentication/middleware
+func HTTP(next http.Handler, auth authentication.Authenticator, options ...Option) http.Handler
+
+// authentication/session
+func (*Manager) Rotate(ctx context.Context, id, refresh string) (Session, string, error)
+
+// authorization
+type Authorizer interface {
+	Authorize(context.Context, Request) (Decision, error)
+}
+// authorization/cedar
+func New(Options) (*Engine, error)
+```
+
+## 7. Acceptance criteria
+
+Test names are unique per package; the package is given where names repeat.
+
+| Criterion | Requirement(s) | Test(s) |
+|---|---|---|
+| Principal validation and cloning | FR-AUTH-01 | `TestValidatePrincipalRequiresIdentityAndCurrentUTCLifetime`, `TestValidatePrincipalRejectsUnboundedOrMalformedTraitsAndMethods`, `TestPrincipalCloneOwnsNestedStateAndSortsMethods`, `TestCredentialAndRequestClonesOwnMutableState` |
+| Chain and context | FR-AUTH-02 | `TestChainUsesFirstSupportingAuthenticator`, `TestChainFailsClosed`, `TestPrincipalContextRoundTripIsIsolated` |
+| Strict JWT verification | FR-AUTH-03 | `TestVerifierAcceptsValidEdDSAToken`, `TestVerifierAcceptsValidRS256Token`, `TestNewVerifierRejectsNonPositiveMaxLifetime`, `TestVerifierRejectsUnconfiguredAlgorithm`, `TestVerifierRejectsNoneAlgorithm`, `TestVerifierRejectsInvalidClaims`, `TestVerifierRejectsBadCredentialAndTokenBounds` |
+| JWT clock skew | FR-AUTH-04 | `TestVerifierHonorsClockSkewForMappedPrincipalExpiration`, `TestVerifierHonorsClockSkewForMappedPrincipalIssuedAt`, `TestVerifierExpiryAndClockSkewOverTime` |
+| API token format, digest, comparison | FR-AUTH-05 | `TestIssueAndAuthenticateRoundTrip`, `TestStoreNeverHoldsRawTokenAndPepperBindsDigest`, `TestAuthenticateRejectsTamperedTokens`, `TestIssueValidatesRequest`, `TestNewManagerValidatesOptions`, `FuzzParseToken` |
+| API token lifecycle | FR-AUTH-06 | `TestAuthenticateExpiry`, `TestRevokeAndList`, `TestLastUsedIsThrottled`, `TestLastUsedCanBeDisabled`, `TestAuthenticateWithoutScopesSetsEmptyScopeTrait` |
+| API tokens in a chain | FR-AUTH-07 | `TestAuthenticateDeclinesForeignCredentials`, `TestAuthenticateIsCompatibleWithChain` |
+| HTTP middleware | FR-AUTH-08 | `TestHTTPAuthenticatesBearerAndCookie`, `TestHTTPRejections`, `TestHTTPAnonymousPassthrough`, `TestHTTPChallengeWithoutRealm`, `TestHTTPPanicsOnInvalidConfiguration`, `TestHTTPWithChainAcceptsAPITokenAndJWTShapes` |
+| Authorization header parsing | FR-AUTH-09 | `TestCredentialFromAuthorizationHeader`, `FuzzAuthorizationHeader` |
+| OIDC flow | FR-AUTH-10 | `TestBeginStoresHashedStateNonceAndPKCE`, `TestBeginRequiresExactRegisteredHTTPSRedirect`, `TestCompleteConsumesBeforeExchangeAndAllowsOnlyOneCallback`, `TestCompleteRejectsNonceProviderAndAuthorizedPartyMismatch`, `TestCompletePassesOnlyStateDigestToStore`, `TestNewRejectsConflictingClientIDs`, `TestMemoryStateStorePutIsCreateOnly` |
+| OIDC trait claims | FR-AUTH-11 | `TestCompleteCopiesOnlyConfiguredVerifiedClaims`, `TestNewOwnsConfiguredTraitClaims`, `TestNewRejectsMalformedConfiguredTraitClaims`, `TestCompleteRejectsMalformedOrUnboundedConfiguredClaims` |
+| OAuth 2.0 flow | FR-AUTH-12 | `TestBeginUsesPKCEAndDoesNotForceOpenID`, `TestCompleteUsesRequiredMapperAsOnlyIdentitySource`, `TestNewRequiresOAuth2Mapper`, `TestNewRejectsNonLoopbackHTTPURLs`, `TestNewAcceptsActualHTTPIPv4AndIPv6Loopback` |
+| Callback state TTL | FR-AUTH-13 | `TestCompleteRejectsStateAfterTTL` (oidc), `TestCompleteRejectsStateAfterTTL` (oauth2) |
+| SAML request and response validation | FR-AUTH-14 | `TestBeginBuildsSignedSHA256RequestForExactRegisteredACS`, `TestBeginRejectsNonExactACS`, `TestProviderOwnsServiceProviderCredentials`, `TestCompleteConsumesRequestBeforeParsing`, `TestCompleteAcceptsSignedResponseWithUnsignedAssertion`, `TestCompleteRejectsUnsignedOrAmbiguousAssertions`, `TestCompleteRejectsMismatchedSignedProtocolFields`, `TestCompleteRejectsInvalidMappedPrincipal` |
+| SAML time rules | FR-AUTH-15 | `TestCompleteAppliesExplicitClockSkewAndLifetime`, `TestCompleteAssertionLifetimeWithSkewOverTime`, `TestCompleteRejectsRelayMismatchAndExpiredRequest`, `TestCompleteRejectsRequestAfterTTL`, `TestCompleteRejectsBearerSubjectConfirmationNotBefore`, `TestCompleteIgnoresCrewjamTemporalGlobals` |
+| SAML input bounds | FR-AUTH-16 | `TestCompleteRejectsExcessiveXMLComplexity`, `TestCompleteChecksEncodedLimitBeforeDecodeOrStoreAccess`, `TestRelayStateUsesSAMLBindingLimit`, `TestMemoryRequestStoreIsAtomicAndDoesNotLeakStoredValues`, `FuzzSAMLResponseBytes` |
+| Magic links are single use | FR-AUTH-17 | `TestMagicLinkHasExactlyOneConcurrentWinner`, `TestIssueStoresOnlyDigestAndReturnsExactBase64URLToken`, `TestConsumeRejectsMalformedTokenBeforeStoreAccess`, `TestConsumeAtomicallyConsumesBeforeExpiryAndPrincipalValidation`, `FuzzMagicLinkTokens` |
+| Magic-link redirects and TTL | FR-AUTH-18 | `TestIssueRejectsNonExactOrInsecureRedirectsAndBoundsTTL`, `TestConsumeHonorsTTLBoundary` |
+| Device grant polling | FR-AUTH-19 | `TestStartAndPollHonorsPendingAndSlowDown`, `TestPollMapsTerminalErrors`, `TestPollStopsAtAuthorizationExpiry`, `TestPollReturnsCallerContextError`, `TestPollDefaultsIntervalAndSendsClientSecret`, `TestNewWithDiscovery`, `TestLoopbackServer` |
+| Device response validation | FR-AUTH-20 | `TestStartRejectsUnsafeResponses`, `TestStartMapsOAuthErrors`, `TestNewDiscoveryFailures`, `TestNewValidatesOptions`, `TestPollRejectsInvalidAuthorization` |
+| Session lifecycle | FR-AUTH-21 | `TestCreateStoresDigestOnlyAndReturnsCopiedData`, `TestCreateRejectsInvalidBoundsAndRandomFailure`, `TestValidateAndRotateCheckDurableRevocationAndExpiry`, `TestValidateAndRotateRejectCorruptDurableRecords` |
+| Session rotation | FR-AUTH-22 | `TestRotateUsesLeaseAndHasExactlyOneConcurrentWinner`, `TestRotateFailsClosedOnLeaseAndStoreAmbiguity`, `TestSessionStoresAreConcurrencySafeAndFenced`, `TestMemoryStoreCompareAndSwapRejectsInvalidTransitions` |
+| SSO selection | FR-AUTH-23 | `TestRegistrySelectsExactNormalizedDomainsAndProviderNames`, `TestRegistryRejectsDuplicateProvidersAndDomains`, `TestRegistryRejectsAmbiguousProviderNames` |
+| Metadata cache | FR-AUTH-24 | `TestCacheFallsBackToLoaderWhenCacheMissOrOutage`, `TestCacheRejectsMismatchedIssuerAndInsecureEndpoints`, `TestCacheReloadsInvalidCachedDocument` |
+| Cedar decisions | FR-AUTH-25 | `TestEnginePermitsDefaultsToDenyAndHonorsForbid`, `TestEngineUsesEntityHierarchy`, `TestEngineDeniesEvaluationErrorsWithDeterministicSanitizedDiagnostics`, `Example` |
+| Cedar input validation | FR-AUTH-26 | `TestEngineRejectsInvalidConstructionSourcesAndEntities`, `TestEngineRejectsOversizedSourcesBeforeCopying`, `TestEngineRejectsDuplicateAndInvalidEntityUIDs`, `TestEngineValidatesEntityIdentifiers`, `TestEngineConvertsBoundedContextAndRejectsAmbiguity`, `TestEngineDeepCopiesRequestBeforeCallingEntitySource`, `TestEngineHonorsCancellation`, `FuzzCedarContext` |
+| Sanitized errors | NFR-AUTH-01 | `TestAuthenticationErrorsDoNotContainCredentials`, `TestStoreErrorsAreSanitized`, `TestProviderSanitizesStateStoreErrors` (oidc, oauth2), `TestCompleteSanitizesStoreParserAndMapperErrors`, `TestStoreContractValidationAndSanitizedErrors`, `TestVerifierRejectsUnknownKeyAndRedactsTokenFromErrors`, `FuzzJWTBytes`, `FuzzAPITokens` |
+| Digest-only storage, redaction | NFR-AUTH-02 | `TestPendingSecretsAreOpaqueRedactingAndPersistable`, `TestStateDigestUsesSHA256LookupOnly`, `TestStoreNeverHoldsRawTokenAndPepperBindsDigest` |
+| Constant-time comparison | NFR-AUTH-03 | `TestDigestComparisonsAreConstantTime`, `TestDigestsEqualIsExact` |
+| Randomness failure | NFR-AUTH-04 | `TestIssueFailsClosedOnRandomnessFailure`, `TestIssueHandlesRandomFailureAndContextCancellation` |
+| Independence and dependencies | NFR-AUTH-05 | `TestAuthenticationAndAuthorizationAreIndependent`, `TestMiddlewareUsesOnlyStandardLibrary`, `TestDirectDependenciesAreAllowlisted` |
+| Value isolation | NFR-AUTH-07 | `TestPrincipalAndLinkCopyIsolation`, `TestPrincipalContextRoundTripIsIsolated` |
+
+## 8. Source references
+
+None. The library implements the public specifications it names (RFC 6749,
+RFC 6750, RFC 7519, RFC 7636, RFC 8628, OpenID Connect Core 1.0, SAML 2.0)
+on top of the dependencies listed in ADR-0003.
+
+## 9. Open questions
+
+- Q1: Should the store interfaces get public conformance suites (ADR-0008)?
+- Q2: Should SAML gain an assertion-ID replay cache in addition to the
+  single-use request binding?
+- Q3: Should the minimum Go version move to 1.27 when 1.26 leaves upstream
+  support (ADR-0010)?
