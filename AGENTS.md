@@ -1,10 +1,10 @@
 # AGENTS.md
 
-Rules for anyone, human or agent, changing go-auth. They are binding. If a
+Rules for anyone, human or agent, changing auth. They are binding. If a
 change has to break one, say so in the pull request and, where it is a design
 decision, record it in an ADR.
 
-go-auth is a set of independent Go packages for authentication (JWT, OIDC,
+auth is a set of independent Go packages for authentication (JWT, OIDC,
 OAuth 2.0, SAML, API tokens, magic links, device grant, sessions) and Cedar
 authorization behind protocol-neutral contracts. Its requirements and design
 decisions are recorded in [docs/](docs/README.md).
@@ -67,7 +67,7 @@ No behaviour is added or changed before the documents that govern it say so.
 
 ## Layout
 
-Single module `github.com/justusschock/go-auth`; the root holds only
+Single module `github.com/justusschock/auth`; the root holds only
 module-level tests and the README example.
 
 - `authentication/`: neutral contracts (`Credential`, `Principal`,
@@ -84,7 +84,7 @@ module-level tests and the README example.
   provider.
 - `authentication/saml/`: SAML 2.0 service provider.
 - `authentication/sso/`: provider selection by name or e-mail domain.
-- `authentication/metadata/`: provider metadata cache on go-cache.
+- `authentication/metadata/`: provider metadata cache on cache.
 - `authentication/magiclink/`: single-use magic links.
 - `authentication/device/`: RFC 8628 device authorization client.
 - `authentication/session/`: durable sessions with lease-protected rotation.

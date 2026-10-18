@@ -32,7 +32,7 @@ import (
 	"unicode/utf8"
 
 	coreosoidc "github.com/coreos/go-oidc/v3/oidc"
-	"github.com/justusschock/go-auth/authentication"
+	"github.com/justusschock/auth/authentication"
 	"golang.org/x/oauth2"
 )
 

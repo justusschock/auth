@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/justusschock/go-auth/authentication"
+	"github.com/justusschock/auth/authentication"
 )
 
 const defaultMaxTokenBytes = 8 << 10

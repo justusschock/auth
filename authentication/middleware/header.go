@@ -6,7 +6,7 @@ package middleware
 import (
 	"strings"
 
-	"github.com/justusschock/go-auth/authentication"
+	"github.com/justusschock/auth/authentication"
 )
 
 // MaxAuthorizationBytes bounds Authorization values accepted by

@@ -1,6 +1,6 @@
-# go-auth
+# auth
 
-go-auth is a set of small, independently importable Go packages for
+auth is a set of small, independently importable Go packages for
 authenticating users and services (JWT, OpenID Connect, OAuth 2.0, SAML 2.0,
 API tokens, magic links, device authorization, server-side sessions) and for
 authorizing requests with [Cedar](https://www.cedarpolicy.com/) policies. It is
@@ -34,7 +34,7 @@ protocol-neutral interfaces instead of a framework.
 ## Installation
 
 ```sh
-go get github.com/justusschock/go-auth@latest
+go get github.com/justusschock/auth@latest
 ```
 
 Requires Go 1.26 or later.
@@ -130,7 +130,7 @@ through. `jwt.Verifier` rejects every non-JWT credential, so place it last.
 
 ## Packages
 
-Module path: `github.com/justusschock/go-auth`. The module root has no Go
+Module path: `github.com/justusschock/auth`. The module root has no Go
 package; import the packages below.
 
 | Package | Purpose |
@@ -143,7 +143,7 @@ package; import the packages below.
 | `authentication/oauth2` | Plain OAuth 2.0 authorization code + PKCE provider with a required user-info mapper |
 | `authentication/saml` | SAML 2.0 service provider (SP-initiated, HTTP-Redirect request, HTTP-POST response) |
 | `authentication/sso` | Provider selection by name or e-mail domain |
-| `authentication/metadata` | Validated provider metadata cache on top of go-cache |
+| `authentication/metadata` | Validated provider metadata cache on top of cache |
 | `authentication/magiclink` | Single-use magic links |
 | `authentication/device` | OAuth 2.0 device authorization grant (RFC 8628) client |
 | `authentication/session` | Durable sessions with lease-protected refresh-token rotation and revocation |
@@ -174,7 +174,7 @@ Packages under `internal/` are not part of the API and may change at any time.
 - **Concurrency.** Authenticators, providers and in-memory stores are safe for
   concurrent use (given concurrency-safe stores you supply). Single-use state
   relies on atomic `Consume` in the store contracts; session rotation is
-  serialized by a [go-distributed-coordination](https://github.com/justusschock/go-distributed-coordination)
+  serialized by a [distributed-coordination](https://github.com/justusschock/distributed-coordination)
   lease and a fenced compare-and-swap. Blocking operations take a
   `context.Context` and honour cancellation.
 - **Storage is yours.** Each stateful package defines a small `Store`
@@ -187,7 +187,7 @@ Packages under `internal/` are not part of the API and may change at any time.
 
 - [docs/README.md](docs/README.md): the product requirements (PRD) and
   architecture decision records (ADRs), including the security model.
-- API reference on [pkg.go.dev](https://pkg.go.dev/github.com/justusschock/go-auth).
+- API reference on [pkg.go.dev](https://pkg.go.dev/github.com/justusschock/auth).
 
 ## Contributing
 

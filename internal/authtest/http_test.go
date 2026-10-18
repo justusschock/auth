@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/justusschock/go-auth/internal/authtest"
+	"github.com/justusschock/auth/internal/authtest"
 )
 
 func TestClientServesHandlerInMemory(t *testing.T) {

@@ -6,8 +6,8 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/justusschock/go-auth/authentication"
-	"github.com/justusschock/go-auth/authentication/sso"
+	"github.com/justusschock/auth/authentication"
+	"github.com/justusschock/auth/authentication/sso"
 )
 
 // FR-AUTH-23

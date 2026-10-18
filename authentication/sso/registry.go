@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/justusschock/go-auth/authentication"
+	"github.com/justusschock/auth/authentication"
 )
 
 // Registration registers a provider and the e-mail domains it serves.

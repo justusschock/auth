@@ -10,7 +10,7 @@
 
 ## Context
 
-Recorded retrospectively for the first public release. go-auth grew as a set
+Recorded retrospectively for the first public release. auth grew as a set
 of security-sensitive packages whose design rationale (why a check exists, why
 a value is hashed, why a test pins exact errors) lived in commit messages and
 review threads. Public contributors, human or agent, need that rationale in

@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 
-	"github.com/justusschock/go-auth/authentication"
-	"github.com/justusschock/go-auth/authentication/middleware"
+	"github.com/justusschock/auth/authentication"
+	"github.com/justusschock/auth/authentication/middleware"
 )
 
 // staticAuthenticator accepts one fixed bearer token.

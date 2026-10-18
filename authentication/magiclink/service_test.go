@@ -15,8 +15,8 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/justusschock/go-auth/authentication"
-	"github.com/justusschock/go-auth/authentication/magiclink"
+	"github.com/justusschock/auth/authentication"
+	"github.com/justusschock/auth/authentication/magiclink"
 )
 
 // FR-AUTH-17

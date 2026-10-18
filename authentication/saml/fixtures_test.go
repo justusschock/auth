@@ -14,7 +14,7 @@ import (
 
 	"github.com/beevik/etree"
 	crewjamsaml "github.com/crewjam/saml"
-	authsaml "github.com/justusschock/go-auth/authentication/saml"
+	authsaml "github.com/justusschock/auth/authentication/saml"
 )
 
 const (

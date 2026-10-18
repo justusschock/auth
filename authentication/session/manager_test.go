@@ -13,9 +13,9 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/justusschock/go-auth/authentication"
-	"github.com/justusschock/go-auth/authentication/session"
-	coordination "github.com/justusschock/go-distributed-coordination"
+	"github.com/justusschock/auth/authentication"
+	"github.com/justusschock/auth/authentication/session"
+	coordination "github.com/justusschock/distributed-coordination"
 )
 
 // FR-AUTH-21

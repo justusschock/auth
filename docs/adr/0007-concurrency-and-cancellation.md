@@ -27,7 +27,7 @@ The code shows:
   and out.
 - Single use is delegated to the store contract: `Consume` must remove and
   return atomically; `Create`/`Put` must be create-only (`ErrReplay`).
-- Session rotation acquires a go-distributed-coordination lease on
+- Session rotation acquires a distributed-coordination lease on
   `auth/session/<id>` (owner `Options.ManagerID`, TTL 10 s, waiting), loads
   the session under the lease, checks the refresh digest, aborts if the lease
   was lost, and writes with `Store.CompareAndSwap(id, version, fence, next)`,
@@ -87,4 +87,4 @@ as is.
 
 ## Links
 
-- github.com/justusschock/go-distributed-coordination
+- github.com/justusschock/distributed-coordination

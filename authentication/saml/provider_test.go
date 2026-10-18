@@ -13,8 +13,8 @@ import (
 	"time"
 
 	crewjamsaml "github.com/crewjam/saml"
-	"github.com/justusschock/go-auth/authentication"
-	authsaml "github.com/justusschock/go-auth/authentication/saml"
+	"github.com/justusschock/auth/authentication"
+	authsaml "github.com/justusschock/auth/authentication/saml"
 	dsig "github.com/russellhaering/goxmldsig"
 )
 

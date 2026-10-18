@@ -4,7 +4,7 @@
 // A session has a random 256-bit ID ("sess_" + base64url) and a separate
 // random 256-bit refresh token that is returned exactly once; only its SHA-256
 // digest is stored. Rotate compares the presented token's digest in constant
-// time and replaces it under a go-distributed-coordination lease, writing
+// time and replaces it under a distributed-coordination lease, writing
 // with a compare-and-swap that is fenced by the lease token, so exactly one of
 // several concurrent rotations with the same token succeeds and a reused
 // (stolen) refresh token is detected as authentication.ErrReplay. Sessions
@@ -23,8 +23,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/justusschock/go-auth/authentication"
-	coordination "github.com/justusschock/go-distributed-coordination"
+	"github.com/justusschock/auth/authentication"
+	coordination "github.com/justusschock/distributed-coordination"
 )
 
 const (

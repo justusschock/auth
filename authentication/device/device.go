@@ -22,8 +22,8 @@ import (
 	"unicode/utf8"
 
 	coreosoidc "github.com/coreos/go-oidc/v3/oidc"
-	"github.com/justusschock/go-auth/authentication"
-	authoidc "github.com/justusschock/go-auth/authentication/oidc"
+	"github.com/justusschock/auth/authentication"
+	authoidc "github.com/justusschock/auth/authentication/oidc"
 	"golang.org/x/oauth2"
 )
 

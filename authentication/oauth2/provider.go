@@ -22,8 +22,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/justusschock/go-auth/authentication"
-	authoidc "github.com/justusschock/go-auth/authentication/oidc"
+	"github.com/justusschock/auth/authentication"
+	authoidc "github.com/justusschock/auth/authentication/oidc"
 	xoauth2 "golang.org/x/oauth2"
 )
 

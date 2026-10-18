@@ -11,10 +11,10 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/justusschock/go-auth/authentication"
-	authoauth2 "github.com/justusschock/go-auth/authentication/oauth2"
-	authoidc "github.com/justusschock/go-auth/authentication/oidc"
-	"github.com/justusschock/go-auth/internal/authtest"
+	"github.com/justusschock/auth/authentication"
+	authoauth2 "github.com/justusschock/auth/authentication/oauth2"
+	authoidc "github.com/justusschock/auth/authentication/oidc"
+	"github.com/justusschock/auth/internal/authtest"
 	"golang.org/x/oauth2"
 )
 

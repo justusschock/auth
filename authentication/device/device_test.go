@@ -13,9 +13,9 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/justusschock/go-auth/authentication"
-	"github.com/justusschock/go-auth/authentication/device"
-	"github.com/justusschock/go-auth/internal/authtest"
+	"github.com/justusschock/auth/authentication"
+	"github.com/justusschock/auth/authentication/device"
+	"github.com/justusschock/auth/internal/authtest"
 )
 
 const (

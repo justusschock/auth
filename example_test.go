@@ -6,10 +6,10 @@ import (
 	"time"
 
 	jwtlib "github.com/golang-jwt/jwt/v5"
-	"github.com/justusschock/go-auth/authentication"
-	authjwt "github.com/justusschock/go-auth/authentication/jwt"
-	"github.com/justusschock/go-auth/authorization"
-	authcedar "github.com/justusschock/go-auth/authorization/cedar"
+	"github.com/justusschock/auth/authentication"
+	authjwt "github.com/justusschock/auth/authentication/jwt"
+	"github.com/justusschock/auth/authorization"
+	authcedar "github.com/justusschock/auth/authorization/cedar"
 )
 
 // exampleKeys serves one HMAC key for every key ID.

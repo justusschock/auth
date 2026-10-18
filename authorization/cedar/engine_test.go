@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/justusschock/go-auth/authorization"
-	authcedar "github.com/justusschock/go-auth/authorization/cedar"
+	"github.com/justusschock/auth/authorization"
+	authcedar "github.com/justusschock/auth/authorization/cedar"
 )
 
 const basicPolicies = `

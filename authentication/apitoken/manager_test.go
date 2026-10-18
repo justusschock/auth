@@ -13,8 +13,8 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/justusschock/go-auth/authentication"
-	"github.com/justusschock/go-auth/authentication/apitoken"
+	"github.com/justusschock/auth/authentication"
+	"github.com/justusschock/auth/authentication/apitoken"
 )
 
 var tokenPattern = regexp.MustCompile(`^dtc_[a-z2-7]{26}_[a-z2-7]{52}$`)

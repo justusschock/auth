@@ -1,6 +1,6 @@
-# go-auth documentation
+# auth documentation
 
-Requirements (PRDs) and architecture decision records (ADRs) for go-auth. The
+Requirements (PRDs) and architecture decision records (ADRs) for auth. The
 process is described in [ADR-0001](adr/0001-record-architecture-decisions.md)
 and [AGENTS.md](../AGENTS.md); new documents start from the
 [PRD template](prd/TEMPLATE.md) or the [ADR template](adr/TEMPLATE.md).
@@ -11,7 +11,7 @@ Requirement area code: `AUTH` (`FR-AUTH-NN`, `NFR-AUTH-NN`).
 
 | PRD | Title | Status | Implementation |
 |---|---|---|---|
-| [0001](prd/0001-go-auth.md) | go-auth authentication and authorization library | Accepted | Complete |
+| [0001](prd/0001-auth.md) | auth authentication and authorization library | Accepted | Complete |
 
 ## Architecture decisions
 

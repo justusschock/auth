@@ -26,8 +26,8 @@ library):
 | `github.com/beevik/etree` | `saml` | XML tree handling for signature validation |
 | `github.com/mattermost/xml-roundtrip-validator` | `saml` | Rejects XML that does not round-trip (signature-wrapping defence) |
 | `github.com/cedar-policy/cedar-go` | `authorization/cedar` | Cedar policy parsing and evaluation |
-| `github.com/justusschock/go-cache` | `metadata` | Cache contract for provider metadata |
-| `github.com/justusschock/go-distributed-coordination` | `session` | Leases with fencing tokens for refresh-token rotation |
+| `github.com/justusschock/cache` | `metadata` | Cache contract for provider metadata |
+| `github.com/justusschock/distributed-coordination` | `session` | Leases with fencing tokens for refresh-token rotation |
 
 ## Decision drivers
 

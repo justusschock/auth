@@ -19,7 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/justusschock/go-auth/authentication"
+	"github.com/justusschock/auth/authentication"
 )
 
 const (

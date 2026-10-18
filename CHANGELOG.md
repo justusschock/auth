@@ -53,5 +53,5 @@ Preparation for the first public release.
 Released before this changelog was kept; see the Git history for
 `v0.2.0`, `v0.3.0` and `v0.4.0`.
 
-[Unreleased]: https://github.com/justusschock/go-auth/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/justusschock/go-auth/releases/tag/v0.4.0
+[Unreleased]: https://github.com/justusschock/auth/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/justusschock/auth/releases/tag/v0.4.0

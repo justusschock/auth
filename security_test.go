@@ -16,14 +16,14 @@ import (
 	"time"
 
 	crewjamsaml "github.com/crewjam/saml"
-	"github.com/justusschock/go-auth/authentication"
-	"github.com/justusschock/go-auth/authentication/apitoken"
-	authjwt "github.com/justusschock/go-auth/authentication/jwt"
-	"github.com/justusschock/go-auth/authentication/magiclink"
-	"github.com/justusschock/go-auth/authentication/middleware"
-	authsaml "github.com/justusschock/go-auth/authentication/saml"
-	"github.com/justusschock/go-auth/authorization"
-	authcedar "github.com/justusschock/go-auth/authorization/cedar"
+	"github.com/justusschock/auth/authentication"
+	"github.com/justusschock/auth/authentication/apitoken"
+	authjwt "github.com/justusschock/auth/authentication/jwt"
+	"github.com/justusschock/auth/authentication/magiclink"
+	"github.com/justusschock/auth/authentication/middleware"
+	authsaml "github.com/justusschock/auth/authentication/saml"
+	"github.com/justusschock/auth/authorization"
+	authcedar "github.com/justusschock/auth/authorization/cedar"
 )
 
 // NFR-AUTH-01

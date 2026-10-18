@@ -1,5 +1,5 @@
 // Package metadata caches identity provider metadata documents (issuer and
-// endpoint URLs, supported algorithms and scopes) in a go-cache Cache.
+// endpoint URLs, supported algorithms and scopes) in a cache Cache.
 //
 // The cache is an optimisation only: a cache miss, a cache error or an
 // invalid cached document falls back to the Loader, and cache writes are best
@@ -13,8 +13,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/justusschock/go-auth/authentication"
-	cache "github.com/justusschock/go-cache"
+	"github.com/justusschock/auth/authentication"
+	cache "github.com/justusschock/cache"
 )
 
 // Document is the subset of provider metadata this module uses.

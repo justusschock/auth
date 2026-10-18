@@ -1,6 +1,6 @@
 # Security policy
 
-go-auth verifies credentials and makes authorization decisions, so security
+auth verifies credentials and makes authorization decisions, so security
 reports are handled with priority.
 
 ## Reporting a vulnerability
@@ -12,7 +12,7 @@ Report it privately through GitHub's security advisories:
 
 1. Open the repository's **Security** tab.
 2. Choose **Report a vulnerability**
-   (`https://github.com/justusschock/go-auth/security/advisories/new`).
+   (`https://github.com/justusschock/auth/security/advisories/new`).
 3. Describe the issue, the affected package(s) and version or commit, and how
    to reproduce it. A minimal test case or proof of concept helps most.
    Never include real credentials, keys or tokens.

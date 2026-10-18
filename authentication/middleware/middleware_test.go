@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/justusschock/go-auth/authentication"
-	"github.com/justusschock/go-auth/authentication/middleware"
+	"github.com/justusschock/auth/authentication"
+	"github.com/justusschock/auth/authentication/middleware"
 )
 
 const secretToken = "dtc_secretsecretsecretsecret"

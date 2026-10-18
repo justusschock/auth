@@ -6,8 +6,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/justusschock/go-auth/authentication/session"
-	coordination "github.com/justusschock/go-distributed-coordination"
+	"github.com/justusschock/auth/authentication/session"
+	coordination "github.com/justusschock/distributed-coordination"
 )
 
 type recordingCoordinator struct {

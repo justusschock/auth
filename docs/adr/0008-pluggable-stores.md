@@ -23,7 +23,7 @@ implementation:
 | `magiclink` | `Store` (Create, Consume) | `MemoryStore` |
 | `oidc` (shared with `oauth2`) | `StateStore` (Put, Consume) with `Pending` and `Secret` | `MemoryStateStore` |
 | `saml` | `RequestStore` (Put, Consume) | `MemoryRequestStore` |
-| `metadata` | `go-cache` `Cache[string, Document]` and a `Loader` | (any go-cache backend) |
+| `metadata` | `cache` `Cache[string, Document]` and a `Loader` | (any cache backend) |
 | `authorization` | `PolicySource`, `EntitySource` | (caller supplied) |
 
 The persisted types are plain Go structs (`apitoken.Record`,

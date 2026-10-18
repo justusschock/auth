@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/justusschock/go-auth/authentication"
-	authjwt "github.com/justusschock/go-auth/authentication/jwt"
+	"github.com/justusschock/auth/authentication"
+	authjwt "github.com/justusschock/auth/authentication/jwt"
 )
 
 type staticKey struct {

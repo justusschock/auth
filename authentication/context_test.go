@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/justusschock/go-auth/authentication"
+	"github.com/justusschock/auth/authentication"
 )
 
 type authenticatorFunc func(context.Context, authentication.Credential) (authentication.Principal, error)

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/justusschock/go-auth/authorization"
+	"github.com/justusschock/auth/authorization"
 )
 
 type staticPolicies []byte

@@ -22,7 +22,7 @@ import (
 	"unicode/utf8"
 
 	cedarsdk "github.com/cedar-policy/cedar-go"
-	"github.com/justusschock/go-auth/authorization"
+	"github.com/justusschock/auth/authorization"
 )
 
 const (

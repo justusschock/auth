@@ -12,8 +12,8 @@ func TestAuthenticationAndAuthorizationAreIndependent(t *testing.T) {
 		packages  string
 		forbidden string
 	}{
-		{"./authentication/...", "github.com/justusschock/go-auth/authorization"},
-		{"./authorization/...", "github.com/justusschock/go-auth/authentication"},
+		{"./authentication/...", "github.com/justusschock/auth/authorization"},
+		{"./authorization/...", "github.com/justusschock/auth/authentication"},
 	}
 	for _, test := range cases {
 		t.Run(test.packages, func(t *testing.T) {
@@ -36,16 +36,16 @@ func TestAuthenticationAndAuthorizationAreIndependent(t *testing.T) {
 // NFR-AUTH-05
 func TestDirectDependenciesAreAllowlisted(t *testing.T) {
 	allowed := map[string]string{
-		"github.com/beevik/etree":                             "saml",
-		"github.com/cedar-policy/cedar-go":                    "authorization/cedar",
-		"github.com/coreos/go-oidc/v3/oidc":                   "oidc, device",
-		"github.com/crewjam/saml":                             "saml",
-		"github.com/golang-jwt/jwt/v5":                        "jwt",
-		"github.com/justusschock/go-cache":                    "metadata",
-		"github.com/justusschock/go-distributed-coordination": "session",
-		"github.com/mattermost/xml-roundtrip-validator":       "saml",
-		"github.com/russellhaering/goxmldsig":                 "saml",
-		"golang.org/x/oauth2":                                 "oauth2, oidc, device",
+		"github.com/beevik/etree":                          "saml",
+		"github.com/cedar-policy/cedar-go":                 "authorization/cedar",
+		"github.com/coreos/go-oidc/v3/oidc":                "oidc, device",
+		"github.com/crewjam/saml":                          "saml",
+		"github.com/golang-jwt/jwt/v5":                     "jwt",
+		"github.com/justusschock/cache":                    "metadata",
+		"github.com/justusschock/distributed-coordination": "session",
+		"github.com/mattermost/xml-roundtrip-validator":    "saml",
+		"github.com/russellhaering/goxmldsig":              "saml",
+		"golang.org/x/oauth2":                              "oauth2, oidc, device",
 	}
 	output, err := exec.Command("go", "list", "-f", `{{range .Imports}}{{.}} {{end}}`, "./...").CombinedOutput()
 	if err != nil {
@@ -53,7 +53,7 @@ func TestDirectDependenciesAreAllowlisted(t *testing.T) {
 	}
 	for _, imported := range strings.Fields(string(output)) {
 		if !strings.Contains(strings.SplitN(imported, "/", 2)[0], ".") ||
-			imported == "github.com/justusschock/go-auth" || strings.HasPrefix(imported, "github.com/justusschock/go-auth/") {
+			imported == "github.com/justusschock/auth" || strings.HasPrefix(imported, "github.com/justusschock/auth/") {
 			continue // standard library or this module
 		}
 		if _, ok := allowed[imported]; !ok {
@@ -71,8 +71,8 @@ func TestMiddlewareUsesOnlyStandardLibrary(t *testing.T) {
 		t.Fatalf("go list: %v: %s", err, output)
 	}
 	allowed := map[string]bool{
-		"github.com/justusschock/go-auth/authentication":            true,
-		"github.com/justusschock/go-auth/authentication/middleware": true,
+		"github.com/justusschock/auth/authentication":            true,
+		"github.com/justusschock/auth/authentication/middleware": true,
 	}
 	for _, dependency := range strings.Fields(string(output)) {
 		if !allowed[dependency] {

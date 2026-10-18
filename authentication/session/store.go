@@ -7,8 +7,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/justusschock/go-auth/authentication"
-	coordination "github.com/justusschock/go-distributed-coordination"
+	"github.com/justusschock/auth/authentication"
+	coordination "github.com/justusschock/distributed-coordination"
 )
 
 const (

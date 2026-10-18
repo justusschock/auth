@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/justusschock/go-auth/authentication"
-	"github.com/justusschock/go-auth/authentication/apitoken"
+	"github.com/justusschock/auth/authentication"
+	"github.com/justusschock/auth/authentication/apitoken"
 )
 
 func ExampleManager() {

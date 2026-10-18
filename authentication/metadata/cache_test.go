@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	authmetadata "github.com/justusschock/go-auth/authentication/metadata"
-	cache "github.com/justusschock/go-cache"
+	authmetadata "github.com/justusschock/auth/authentication/metadata"
+	cache "github.com/justusschock/cache"
 )
 
 // FR-AUTH-24

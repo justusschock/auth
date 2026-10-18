@@ -36,7 +36,7 @@ import (
 
 	"github.com/beevik/etree"
 	crewjamsaml "github.com/crewjam/saml"
-	"github.com/justusschock/go-auth/authentication"
+	"github.com/justusschock/auth/authentication"
 	xrv "github.com/mattermost/xml-roundtrip-validator"
 	dsig "github.com/russellhaering/goxmldsig"
 )
