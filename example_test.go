@@ -12,21 +12,46 @@ import (
 	authcedar "github.com/justusschock/go-auth/authorization/cedar"
 )
 
+// exampleKeys serves one HMAC key for every key ID.
 type exampleKeys struct{ key []byte }
 
 func (k exampleKeys) Key(context.Context, string) (any, error) { return k.key, nil }
 
-func Example_authentication() {
-	now := time.Unix(1_700_000_000, 0).UTC()
+// examplePolicies serves fixed Cedar policy text.
+type examplePolicies string
+
+func (p examplePolicies) Policies(context.Context) ([]byte, error) { return []byte(p), nil }
+
+// exampleEntities serves an empty entity list for every request.
+type exampleEntities struct{}
+
+func (exampleEntities) Entities(context.Context, authorization.Request) ([]byte, error) {
+	return []byte("[]"), nil
+}
+
+// Example authenticates a JWT bearer token and authorizes the resulting
+// principal with a Cedar policy. Authentication and authorization are
+// independent; the caller maps the principal to an authorization entity.
+// FR-AUTH-25
+func Example() {
+	ctx := context.Background()
 	key := []byte("example-key-with-at-least-32-bytes")
-	verifier, _ := authjwt.NewVerifier(authjwt.Options{
+
+	// Authentication: a strict JWT verifier.
+	verifier, err := authjwt.NewVerifier(authjwt.Options{
 		Issuer:      "https://issuer.example",
 		Audiences:   []string{"example-api"},
 		Algorithms:  []string{"HS256"},
 		Keys:        exampleKeys{key: key},
-		Clock:       func() time.Time { return now },
+		ClockSkew:   time.Minute,
 		MaxLifetime: 15 * time.Minute,
 	})
+	if err != nil {
+		panic(err)
+	}
+
+	// A token as an identity provider would issue it.
+	now := time.Now()
 	token := jwtlib.NewWithClaims(jwtlib.SigningMethodHS256, jwtlib.MapClaims{
 		"iss": "https://issuer.example",
 		"sub": "alice",
@@ -35,32 +60,41 @@ func Example_authentication() {
 		"exp": now.Add(5 * time.Minute).Unix(),
 	})
 	token.Header["kid"] = "example-key"
-	signed, _ := token.SignedString(key)
-	principal, _ := verifier.Authenticate(context.Background(), authentication.Credential{Kind: "jwt", Token: []byte(signed)})
-	fmt.Println(principal.ID)
-	// Output: https://issuer.example|alice
-}
+	signed, err := token.SignedString(key)
+	if err != nil {
+		panic(err)
+	}
 
-type examplePolicies string
+	principal, err := verifier.Authenticate(ctx, authentication.Credential{
+		Kind:  authentication.CredentialKindJWT,
+		Token: []byte(signed),
+	})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("authenticated:", principal.ID)
 
-func (p examplePolicies) Policies(context.Context) ([]byte, error) { return []byte(p), nil }
-
-type exampleEntities struct{}
-
-func (exampleEntities) Entities(context.Context, authorization.Request) ([]byte, error) {
-	return []byte("[]"), nil
-}
-
-func Example_authorization() {
-	engine, _ := authcedar.New(authcedar.Options{
-		Policies: examplePolicies(`permit(principal, action == Action::"read", resource);`),
+	// Authorization: Cedar policies evaluated per request, default deny.
+	engine, err := authcedar.New(authcedar.Options{
+		Policies: examplePolicies(`permit(principal == User::"alice", action == Action::"read", resource);`),
 		Entities: exampleEntities{},
 	})
-	decision, _ := engine.Authorize(context.Background(), authorization.Request{
-		Principal: authorization.Entity{Type: "User", ID: "alice"},
-		Action:    authorization.Entity{Type: "Action", ID: "read"},
-		Resource:  authorization.Entity{Type: "Document", ID: "document-1"},
-	})
-	fmt.Println(decision.Allowed)
-	// Output: true
+	if err != nil {
+		panic(err)
+	}
+	for _, action := range []string{"read", "delete"} {
+		decision, err := engine.Authorize(ctx, authorization.Request{
+			Principal: authorization.Entity{Type: "User", ID: principal.Subject},
+			Action:    authorization.Entity{Type: "Action", ID: action},
+			Resource:  authorization.Entity{Type: "Document", ID: "report"},
+		})
+		if err != nil {
+			panic(err)
+		}
+		fmt.Printf("%s allowed: %v\n", action, decision.Allowed)
+	}
+	// Output:
+	// authenticated: https://issuer.example|alice
+	// read allowed: true
+	// delete allowed: false
 }
