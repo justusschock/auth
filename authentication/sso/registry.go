@@ -1,3 +1,8 @@
+// Package sso selects the federated login provider for a user's input: an
+// exact provider name or an e-mail address whose domain is registered.
+//
+// Names and domains are trimmed and lower-cased. Registration fails on
+// duplicates, so one input can never resolve to two providers.
 package sso
 
 import (
@@ -7,16 +12,22 @@ import (
 	"github.com/justusschock/go-auth/authentication"
 )
 
+// Registration registers a provider and the e-mail domains it serves.
 type Registration struct {
 	Provider authentication.FederatedProvider
 	Domains  []string
 }
 
+// Registry maps provider names and e-mail domains to providers. It is
+// immutable after construction and safe for concurrent use.
 type Registry struct {
 	providers map[string]authentication.FederatedProvider
 	domains   map[string]authentication.FederatedProvider
 }
 
+// NewRegistry validates registrations and returns a Registry. It returns
+// authentication.ErrInvalidCredential for nil providers, invalid names or
+// domains, and duplicates.
 func NewRegistry(registrations []Registration) (*Registry, error) {
 	registry := &Registry{
 		providers: make(map[string]authentication.FederatedProvider, len(registrations)),
@@ -48,6 +59,9 @@ func NewRegistry(registrations []Registration) (*Registry, error) {
 	return registry, nil
 }
 
+// Select returns the provider registered under input as a name or, for an
+// address of the form "local@domain", under its domain. It returns
+// authentication.ErrProviderNotFound otherwise.
 func (r *Registry) Select(input string) (authentication.FederatedProvider, error) {
 	normalized := normalize(input)
 	if invalidText(normalized) || strings.Contains(normalized, "/") {

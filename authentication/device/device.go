@@ -56,6 +56,7 @@ type Error struct {
 	StatusCode int
 }
 
+// Error describes the OAuth error without any response body.
 func (e *Error) Error() string {
 	if e.Code == "" {
 		return fmt.Sprintf("device: authorization server error (HTTP %d)", e.StatusCode)
@@ -98,7 +99,8 @@ type Authorization struct {
 	Interval                time.Duration
 }
 
-// Client runs device authorization flows for one OAuth client.
+// Client runs device authorization flows for one OAuth client. It is safe for
+// concurrent use.
 type Client struct {
 	config     oauth2.Config
 	httpClient *http.Client

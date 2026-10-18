@@ -1,4 +1,11 @@
-// Package authorization defines protocol-neutral authorization contracts.
+// Package authorization defines protocol-neutral authorization contracts: a
+// Request of principal, action and resource entities plus context, an
+// Authorizer that returns a Decision, and the PolicySource and EntitySource
+// interfaces an implementation reads from. Package cedar provides the Cedar
+// implementation.
+//
+// The package does not import package authentication; callers map an
+// authenticated principal to a request entity themselves.
 package authorization
 
 import "context"

@@ -16,7 +16,11 @@ const (
 	maxMethodBytes     = 256
 )
 
-// Principal is a protocol-neutral authenticated identity.
+// Principal is a protocol-neutral authenticated identity. ID is unique across
+// issuers (authenticators in this module use "<issuer>|<subject>").
+// AuthenticatedAt and ExpiresAt are UTC and bound the principal's validity;
+// Traits carries bounded claim data and Methods the authentication methods
+// used, such as "jwt", "oidc", "saml" or "apitoken".
 type Principal struct {
 	ID              string
 	Issuer          string
@@ -71,7 +75,12 @@ func (c Credential) Clone() Credential {
 	return clone
 }
 
-// ValidatePrincipal checks identity, lifetime, and bounded claim data.
+// ValidatePrincipal checks identity, lifetime, and bounded claim data at now.
+// ID, Issuer and Subject must be non-empty UTF-8 without NUL; both times must
+// be non-zero UTC with AuthenticatedAt <= now < ExpiresAt; traits and methods
+// are bounded in count and size and methods are unique. It returns
+// ErrExpired when only the lifetime has ended and ErrInvalidPrincipal
+// otherwise.
 func ValidatePrincipal(principal Principal, now time.Time) error {
 	if invalidText(principal.ID) || invalidText(principal.Issuer) || invalidText(principal.Subject) {
 		return ErrInvalidPrincipal

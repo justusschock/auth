@@ -1,3 +1,10 @@
+// Package metadata caches identity provider metadata documents (issuer and
+// endpoint URLs, supported algorithms and scopes) in a go-cache Cache.
+//
+// The cache is an optimisation only: a cache miss, a cache error or an
+// invalid cached document falls back to the Loader, and cache writes are best
+// effort. Every document, cached or loaded, must name exactly the requested
+// issuer and use https endpoints before it is returned.
 package metadata
 
 import (
@@ -10,6 +17,7 @@ import (
 	cache "github.com/justusschock/go-cache"
 )
 
+// Document is the subset of provider metadata this module uses.
 type Document struct {
 	Issuer          string
 	AuthURL         string
@@ -21,26 +29,38 @@ type Document struct {
 	SupportedScopes []string
 }
 
+// Loader fetches the metadata document for an issuer.
 type Loader interface {
 	Load(context.Context, string) (Document, error)
 }
 
+// LoaderFunc adapts a function to Loader.
 type LoaderFunc func(context.Context, string) (Document, error)
 
+// Load calls f.
 func (f LoaderFunc) Load(ctx context.Context, issuer string) (Document, error) {
 	return f(ctx, issuer)
 }
 
+// Cache serves validated metadata documents from a backing cache with a
+// loader fallback. It is safe for concurrent use when the backing cache and
+// loader are.
 type Cache struct {
 	cache  cache.Cache[string, Document]
 	loader Loader
 	ttl    time.Duration
 }
 
+// NewCache returns a Cache. backing may be nil to disable caching; ttl <= 0
+// disables cache writes.
 func NewCache(backing cache.Cache[string, Document], loader Loader, ttl time.Duration) *Cache {
 	return &Cache{cache: backing, loader: loader, ttl: ttl}
 }
 
+// Get returns the validated document for issuer. It returns
+// authentication.ErrProviderNotFound when nothing is cached and no loader is
+// configured, authentication.ErrInvalidCredential for an invalid loaded
+// document, and loader errors unchanged.
 func (c *Cache) Get(ctx context.Context, issuer string) (Document, error) {
 	if c.cache != nil {
 		if document, found, err := c.cache.Get(ctx, issuer); err == nil && found {

@@ -1,4 +1,15 @@
-// Package cedar evaluates independent authorization requests with Cedar.
+// Package cedar implements authorization.Authorizer with the Cedar policy
+// language (github.com/cedar-policy/cedar-go).
+//
+// For every request the Engine reads the policy text and the request-scoped
+// entity JSON from its sources, so policy changes take effect immediately and
+// no state is cached. Inputs are bounded (1 MiB of policies, 1 MiB of
+// entities, entity identifiers, context depth and size) and validated;
+// duplicate or invalid entity UIDs, mixed-type context sets and unsupported
+// context value types are rejected. Evaluation is default-deny: a decision
+// is allowed only when a permit policy matches, no forbid policy matches and
+// no policy failed to evaluate. Diagnostic reasons and errors list policy IDs
+// only, in deterministic order.
 package cedar
 
 import (
@@ -31,7 +42,8 @@ type Options struct {
 	Entities authorization.EntitySource
 }
 
-// Engine evaluates Cedar policies against request-scoped entities.
+// Engine evaluates Cedar policies against request-scoped entities. It is safe
+// for concurrent use when its sources are.
 type Engine struct {
 	policies authorization.PolicySource
 	entities authorization.EntitySource
@@ -45,7 +57,9 @@ func New(options Options) (*Engine, error) {
 	return &Engine{policies: options.Policies, entities: options.Entities}, nil
 }
 
-// Authorize evaluates one request. Every ambiguous or invalid input fails closed.
+// Authorize evaluates one request. Every ambiguous or invalid input fails
+// closed with an error from package authorization. Request.Context accepts
+// bool, string, int64, []string, []any and map[string]any values.
 func (e *Engine) Authorize(ctx context.Context, request authorization.Request) (authorization.Decision, error) {
 	if err := ctx.Err(); err != nil {
 		return authorization.Decision{}, err
