@@ -29,14 +29,17 @@ races), and federated flows talk HTTP to identity providers.
    concurrency; in-memory HTTP; fuzz targets for parsers; architecture tests
    for dependencies (chosen)**
    - Pro: deterministic virtual time makes exact boundaries testable (the
-     last valid nanosecond and the first invalid one); no injected clocks in
-     the API (ADR-0009); no network.
+     last valid nanosecond and the first invalid one), including the default
+     `time.Now` path and timer-driven code such as device polling; no
+     network.
    - Con: code inside a bubble must not block on real I/O, which forces
      in-memory transports.
-2. **Injected fake clocks**
-   - Pro: works on any Go version.
-   - Con: test-only API surface on security components; every package must
-     thread the clock through.
+2. **Drive time through `Options.Clock` in every test**
+   - Pro: works on any Go version; the option is public API anyway
+     (ADR-0009).
+   - Con: never exercises the default `time.Now` path; cannot drive
+     timers, sleeps or goroutine interleavings (device polling, rotation
+     races).
 3. **Integration tests against real identity providers**
    - Pro: realistic.
    - Con: slow, credentials in CI, non-deterministic; the protocol libraries
@@ -59,6 +62,12 @@ We will test as follows:
   `TestCompleteAssertionLifetimeWithSkewOverTime`) and concurrent-winner
   tests run deterministically. Subtests wrap their own bubble (`t.Run` is not
   allowed inside one).
+- **`Options.Clock` tests**: one per package that has the option
+  (`TestSuppliedClockIsHonoured` in `apitoken`, `magiclink` and `session`;
+  `TestVerifierHonorsSuppliedClock` in `jwt`;
+  `TestProviderHonorsSuppliedClock` in `oauth2`, `oidc` and `saml`) pins a
+  clock far from the current time, in a non-UTC zone, and shows that
+  checks and returned timestamps follow it in UTC (FR-AUTH-27).
 - **In-memory HTTP** (`internal/authtest`) for OIDC, OAuth2 and device
   endpoints; tests pass the client through `oauth2.HTTPClient` or
   `Options.HTTPClient`. `device.TestLoopbackServer` is the one deliberate

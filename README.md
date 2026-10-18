@@ -165,7 +165,10 @@ Packages under `internal/` are not part of the API and may change at any time.
   that must be stored (nonce, PKCE verifier, device code) are wrapped in a
   redacting `oidc.Secret`. Presented API and refresh tokens are compared in
   constant time. See [SECURITY.md](SECURITY.md).
-- **Time.** Expiry is checked against `time.Now`; clock skew is explicit and
+- **Time.** Expiry is checked against `Options.Clock` where a package offers
+  one (`apitoken`, `jwt`, `magiclink`, `oauth2`, `oidc`, `saml`, `session`;
+  default `time.Now`, always used in UTC) and against `time.Now` elsewhere;
+  a supplied clock is trusted like a store. Clock skew is explicit and
   bounded per protocol, and one-time state is consumed before it is checked so
   an expired or invalid value cannot be retried.
 - **Concurrency.** Authenticators, providers and in-memory stores are safe for

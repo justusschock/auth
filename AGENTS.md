@@ -55,8 +55,11 @@ No behaviour is added or changed before the documents that govern it say so.
   documented, covered by tests and examples, and changed only through an ADR.
 - Implementation details live under `internal/` or stay unexported. Do not
   export something only to test it; test from inside the package instead.
-  Options exist for callers, not for tests: do not add clock or similar
-  test-only injection points (use `testing/synctest`).
+  Options exist for callers, not for tests: do not add test-only injection
+  points or hooks (use `testing/synctest` and test-side wrappers). The
+  existing `Options.Clock` fields are public API for callers (nil means
+  `time.Now`, values are used in UTC); keep them, and route every time read
+  of those packages through them.
 - Test helpers used only by this repository live in `internal/`.
 - Versioning follows semver. While the major version is `0`, a minor release
   may break the API; every break is listed in `CHANGELOG.md` and backed by an
@@ -123,7 +126,9 @@ module-level tests and the README example.
   (expiry, clock skew, TTLs, polling intervals, leases, goroutine
   coordination). No real `time.Sleep` waits in tests. HTTP endpoints are
   served in memory with `internal/authtest` so tests can run in bubbles; the
-  only real-socket test is `device.TestLoopbackServer`.
+  only real-socket test is `device.TestLoopbackServer`. Each package with an
+  `Options.Clock` keeps one test that a supplied clock is honoured
+  (FR-AUTH-27); all other time-dependent tests use synctest, not the clock.
 - Security regressions get a test that fails without the fix; fuzz targets
   (`security_test.go`, `FuzzParseToken`) cover parsers of untrusted input.
 - Stores you add must satisfy the documented contract (atomic consume,

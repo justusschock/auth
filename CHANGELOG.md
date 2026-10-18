@@ -12,28 +12,26 @@ Preparation for the first public release.
 
 ### Removed (breaking)
 
-- `Clock func() time.Time` fields from `apitoken.Options`, `jwt.Options`,
-  `magiclink.Options`, `oauth2.Options`, `oidc.Options`, `saml.Options` and
-  `session.Options`. They existed only so tests could pin the current time;
-  the packages now use `time.Now` and the tests use `testing/synctest`
-  (ADR-0009). Remove the field from option literals; no other change is
-  needed.
 - `session.MemoryStore.FailNextCompareAndSwap` and
   `session.MemoryStore.ObservedGetWhileLocked`, test instrumentation that is
-  now implemented inside the tests (ADR-0009).
+  now implemented inside the tests (ADR-0009). Remove the calls; no other
+  change is needed.
 
 ### Added
 
-- Package documentation and doc comments for every exported identifier, and
-  runnable examples (`Example`, `apitoken.ExampleManager`,
-  `middleware.ExampleHTTP`).
+- Package documentation and doc comments for every exported identifier,
+  including the `Options.Clock` fields of `apitoken`, `jwt`, `magiclink`,
+  `oauth2`, `oidc`, `saml` and `session`, which stay public API (nil means
+  `time.Now`; values are used in UTC), and runnable examples (`Example`,
+  `apitoken.ExampleManager`, `middleware.ExampleHTTP`).
 - `SECURITY.md` with the private vulnerability reporting process; `NOTICE`.
 - `docs/`: retrospective PRD (requirements `FR-AUTH-*`, `NFR-AUTH-*`) and
   ADRs, including the security model (secret handling, constant-time
   comparisons, expiry, clock-skew and TTL rules).
 - `testing/synctest` tests for JWT expiry with clock skew, the magic-link TTL
   boundary, OIDC/OAuth2 state expiry, the SAML request TTL and assertion
-  lifetime with skew, and the session lifetime boundary.
+  lifetime with skew, and the session lifetime boundary; tests that a
+  supplied `Options.Clock` is honoured in every package that has one.
 - A test that keeps direct third-party imports to the allowlist in ADR-0003.
 
 ### Changed

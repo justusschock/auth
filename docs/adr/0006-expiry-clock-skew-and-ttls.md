@@ -24,8 +24,9 @@ This ADR records the rules as implemented.
 - Library-produced times are UTC; `authentication.ValidatePrincipal`
   rejects principals whose `AuthenticatedAt` or `ExpiresAt` is not UTC, is
   zero, is unordered, or has `AuthenticatedAt > now`.
-- `now` is `time.Now()`, read once per operation; there is no injectable
-  clock (ADR-0009).
+- `now` is the value of `Options.Clock` (default `time.Now`) converted to
+  UTC. A supplied clock is trusted configuration, like the stores and key
+  sources (ADR-0009).
 - Clock skew is explicit, bounded per protocol and never applied to
   library-minted state (magic links, OAuth/SAML request state, API tokens,
   sessions), whose times come from the same process.

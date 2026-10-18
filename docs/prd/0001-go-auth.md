@@ -106,6 +106,7 @@ depend on how the caller authenticated.
 | FR-AUTH-24 | `metadata.Cache` returns provider metadata whose issuer matches and whose endpoints are https, falling back to the loader on cache miss, error or invalid cached data. | MUST |
 | FR-AUTH-25 | `authorization` defines `Request`, `Entity`, `Decision`, `Authorizer`, `PolicySource` and `EntitySource`; `cedar.Engine` evaluates policies and request-scoped entities per request, default deny, honouring `forbid` and entity hierarchy, and denies with deterministic, sanitized diagnostics on evaluation errors. | MUST |
 | FR-AUTH-26 | The Cedar engine validates configuration, entity identifiers, bounded sources and context values, rejects duplicate entities and ambiguous context, passes entity sources a deep copy of the request, and honours cancellation. | MUST |
+| FR-AUTH-27 | `apitoken`, `jwt`, `magiclink`, `oauth2`, `oidc`, `saml` and `session` accept an optional `Options.Clock`; nil selects `time.Now`, and every expiry check and every timestamp they produce uses the clock's value converted to UTC. | MUST |
 
 ## 5. Non-functional requirements
 
@@ -187,6 +188,7 @@ Test names are unique per package; the package is given where names repeat.
 | Metadata cache | FR-AUTH-24 | `TestCacheFallsBackToLoaderWhenCacheMissOrOutage`, `TestCacheRejectsMismatchedIssuerAndInsecureEndpoints`, `TestCacheReloadsInvalidCachedDocument` |
 | Cedar decisions | FR-AUTH-25 | `TestEnginePermitsDefaultsToDenyAndHonorsForbid`, `TestEngineUsesEntityHierarchy`, `TestEngineDeniesEvaluationErrorsWithDeterministicSanitizedDiagnostics`, `Example` |
 | Cedar input validation | FR-AUTH-26 | `TestEngineRejectsInvalidConstructionSourcesAndEntities`, `TestEngineRejectsOversizedSourcesBeforeCopying`, `TestEngineRejectsDuplicateAndInvalidEntityUIDs`, `TestEngineValidatesEntityIdentifiers`, `TestEngineConvertsBoundedContextAndRejectsAmbiguity`, `TestEngineDeepCopiesRequestBeforeCallingEntitySource`, `TestEngineHonorsCancellation`, `FuzzCedarContext` |
+| Supplied clock | FR-AUTH-27 | `TestSuppliedClockIsHonoured` (apitoken, magiclink, session), `TestVerifierHonorsSuppliedClock`, `TestProviderHonorsSuppliedClock` (oauth2, oidc, saml) |
 | Sanitized errors | NFR-AUTH-01 | `TestAuthenticationErrorsDoNotContainCredentials`, `TestStoreErrorsAreSanitized`, `TestProviderSanitizesStateStoreErrors` (oidc, oauth2), `TestCompleteSanitizesStoreParserAndMapperErrors`, `TestStoreContractValidationAndSanitizedErrors`, `TestVerifierRejectsUnknownKeyAndRedactsTokenFromErrors`, `FuzzJWTBytes`, `FuzzAPITokens` |
 | Digest-only storage, redaction | NFR-AUTH-02 | `TestPendingSecretsAreOpaqueRedactingAndPersistable`, `TestStateDigestUsesSHA256LookupOnly`, `TestStoreNeverHoldsRawTokenAndPepperBindsDigest` |
 | Constant-time comparison | NFR-AUTH-03 | `TestDigestComparisonsAreConstantTime`, `TestDigestsEqualIsExact` |
