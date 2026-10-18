@@ -40,7 +40,7 @@ const (
 type Options struct {
 	// Store persists token records. Required.
 	Store Store
-	// Prefix identifies tokens of this Manager, for example "dtc". It must be
+	// Prefix identifies tokens of this Manager, for example "app". It must be
 	// 2-16 characters of [a-z0-9] starting with a letter.
 	Prefix string
 	// Pepper optionally keys token digests with HMAC-SHA256. When set it must
