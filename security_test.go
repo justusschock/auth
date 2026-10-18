@@ -192,9 +192,9 @@ func FuzzCedarContext(f *testing.F) {
 			}
 		}
 		decision, err := engine.Authorize(context.Background(), authorization.Request{
-			Principal: authorization.Entity{Type: "User", ID: "fuzzer"},
-			Action:    authorization.Entity{Type: "Action", ID: "read"},
-			Resource:  authorization.Entity{Type: "Document", ID: "one"},
+			Principal: authorization.Principal{Type: "User", ID: "fuzzer"},
+			Action:    authorization.Action{ID: "read"},
+			Resource:  authorization.Resource{Type: "Document", ID: "one"},
 			Context:   map[string]any{"enabled": true, "value": value},
 		})
 		if err != nil && decision.Allowed {

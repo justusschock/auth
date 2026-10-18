@@ -8,6 +8,15 @@ While the major version is `0`, a minor release may break the API.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `authorization.Request` uses the distinct types
+  `authorization.Principal{Type, ID}`, `authorization.Action{ID}` and
+  `authorization.Resource{Type, ID}`, so the compiler rejects mixed-up
+  fields. `authorization.Entity` is removed; replace `authorization.Entity{...}`
+  with the type of the field it is assigned to and drop `Type: "Action"` from
+  actions, whose Cedar type is always `Action` (ADR-0012).
+
 ## [0.1.0] - 2026-10-18
 
 First public release.
