@@ -51,19 +51,32 @@ type Options struct {
 	// LastUsedInterval throttles TouchLastUsed writes per token. Defaults to
 	// one minute; a negative value disables last-used tracking.
 	LastUsedInterval time.Duration
-	Random           io.Reader
-	Clock            func() time.Time
+	// Random supplies token entropy. Defaults to crypto/rand.Reader; any
+	// replacement must be cryptographically secure.
+	Random io.Reader
+	// Clock returns the current time used for issue, expiry, revocation and
+	// last-used timestamps; its result is converted to UTC. Defaults to
+	// time.Now.
+	Clock func() time.Time
 }
 
 // IssueRequest describes a new API token.
 type IssueRequest struct {
+	// Principal is the identity the token acts for.
 	Principal Identity
-	Name      string
-	Scopes    []string
-	TTL       time.Duration
+	// Name is a non-empty, caller-chosen label of at most 256 bytes.
+	Name string
+	// Scopes are unique RFC 6749 scope tokens (at most 64), carried in
+	// Principal.Traits[ScopeTrait] on authentication. They are opaque to this
+	// package.
+	Scopes []string
+	// TTL is the token lifetime; it must be positive and at most
+	// Options.MaxTTL.
+	TTL time.Duration
 }
 
-// Manager issues, lists, revokes, and authenticates API tokens.
+// Manager issues, lists, revokes, and authenticates API tokens. It is safe
+// for concurrent use when its Store is.
 type Manager struct {
 	store            Store
 	prefix           string
@@ -76,7 +89,8 @@ type Manager struct {
 
 var _ authentication.Authenticator = (*Manager)(nil)
 
-// NewManager validates options and returns a Manager.
+// NewManager validates options and returns a Manager. It returns
+// authentication.ErrInvalidCredential for invalid options.
 func NewManager(options Options) (*Manager, error) {
 	if options.Store == nil || !validPrefix(options.Prefix) {
 		return nil, authentication.ErrInvalidCredential

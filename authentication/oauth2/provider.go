@@ -1,3 +1,13 @@
+// Package oauth2 implements the plain OAuth 2.0 authorization code flow with
+// PKCE (S256) as an authentication.FederatedProvider, for providers that do
+// not issue OpenID Connect ID tokens.
+//
+// State handling matches package oidc: the raw state is never stored, the
+// pending state is consumed atomically before the code exchange, and it
+// expires after Options.StateTTL. Because plain OAuth 2.0 has no verifiable
+// identity token, the required UserInfoMapper is the only identity source:
+// it receives the access token and must establish the principal, for example
+// by calling the provider's user-info API.
 package oauth2
 
 import (
@@ -17,19 +27,38 @@ import (
 	xoauth2 "golang.org/x/oauth2"
 )
 
+// UserInfoMapper derives the principal from an access token. Its result is
+// validated with authentication.ValidatePrincipal.
 type UserInfoMapper func(context.Context, *xoauth2.Token) (authentication.Principal, error)
 
+// Options configures a Provider.
 type Options struct {
-	Name         string
-	Config       xoauth2.Config
+	// Name identifies the provider (lower-cased and trimmed). Required.
+	Name string
+	// Config holds the client credentials and endpoints. ClientID, AuthURL
+	// and TokenURL are required; endpoints must use https, or http on a
+	// loopback host.
+	Config xoauth2.Config
+	// RedirectURIs lists the exact redirect URIs Begin accepts (https, or
+	// http on a loopback host). Required, without duplicates.
 	RedirectURIs []string
-	State        authoidc.StateStore
-	Mapper       UserInfoMapper
-	Clock        func() time.Time
-	Random       io.Reader
-	StateTTL     time.Duration
+	// State persists pending callback state. Required.
+	State authoidc.StateStore
+	// Mapper establishes the principal from the access token. Required.
+	Mapper UserInfoMapper
+	// Clock returns the current time used for state expiry and principal
+	// validation; its result is converted to UTC. Defaults to time.Now.
+	Clock func() time.Time
+	// Random supplies state and PKCE entropy. Defaults to
+	// crypto/rand.Reader; any replacement must be cryptographically secure.
+	Random io.Reader
+	// StateTTL bounds the time between Begin and Complete. Defaults to ten
+	// minutes.
+	StateTTL time.Duration
 }
 
+// Provider is an OAuth 2.0 authorization code flow provider. It is safe for
+// concurrent use when its StateStore and Mapper are.
 type Provider struct {
 	name         string
 	config       xoauth2.Config
@@ -43,6 +72,9 @@ type Provider struct {
 
 var _ authentication.FederatedProvider = (*Provider)(nil)
 
+// New validates options and returns a Provider. It returns
+// authentication.ErrInvalidCredential or authentication.ErrInvalidCallback
+// for invalid options.
 func New(options Options) (*Provider, error) {
 	name := strings.ToLower(strings.TrimSpace(options.Name))
 	if invalidText(name) || options.State == nil || options.Mapper == nil || invalidText(options.Config.ClientID) {
@@ -79,10 +111,13 @@ func New(options Options) (*Provider, error) {
 	}, nil
 }
 
+// Name returns the normalized provider name.
 func (p *Provider) Name() string {
 	return p.name
 }
 
+// Begin starts a login for a registered redirect URI and returns the
+// authorization URL. Scopes are requested as given; "openid" is not added.
 func (p *Provider) Begin(ctx context.Context, request authentication.BeginRequest) (authentication.Redirect, error) {
 	redirectURI, err := p.allowedRedirect(request.RedirectURI)
 	if err != nil {
@@ -123,6 +158,10 @@ func (p *Provider) Begin(ctx context.Context, request authentication.BeginReques
 	return authentication.Redirect{URL: parsed, StateID: state, ExpiresAt: expiresAt}.Clone(), nil
 }
 
+// Complete consumes the callback state, exchanges the code and maps the
+// access token to a principal. It returns authentication.ErrReplay for
+// unknown or reused state, authentication.ErrExpired after Options.StateTTL,
+// and authentication.ErrUnauthenticated for every other failure.
 func (p *Provider) Complete(ctx context.Context, callback authentication.Callback) (authentication.Principal, error) {
 	if callback.StateID == "" || callback.Code == "" {
 		return authentication.Principal{}, authentication.ErrInvalidCallback

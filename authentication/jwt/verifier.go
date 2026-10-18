@@ -1,3 +1,13 @@
+// Package jwt authenticates signed JSON Web Tokens (RFC 7519) as
+// authentication.Credential values of kind authentication.CredentialKindJWT.
+//
+// A Verifier is strict by construction: the issuer, at least one audience,
+// the accepted signature algorithms, a key source and a maximum token lifetime
+// are required; "none" is never accepted; every token must carry a "kid"
+// header, "iss", "sub", "aud", "iat" and "exp"; and "exp - iat" must not
+// exceed Options.MaxLifetime. Options.ClockSkew is applied symmetrically to
+// "exp", "nbf" and "iat". Every failure is reported as
+// authentication.ErrUnauthenticated without token material.
 package jwt
 
 import (
@@ -17,28 +27,50 @@ const (
 	maxKeyIDBytes        = 256
 )
 
-// KeySource returns the verification key for a validated JWT key ID.
+// KeySource returns the verification key for a validated JWT key ID. The
+// returned key must match the token's algorithm, for example []byte for HMAC,
+// *rsa.PublicKey for RS256 or ed25519.PublicKey for EdDSA. Errors are never
+// shown to callers of Verifier.Authenticate.
 type KeySource interface {
 	Key(context.Context, string) (any, error)
 }
 
-// ClaimsMapper maps verified JWT claims to a protocol-neutral principal.
+// ClaimsMapper maps verified JWT claims to a protocol-neutral principal. It is
+// called only after the signature and all registered claims have been
+// verified. The returned principal is validated with
+// authentication.ValidatePrincipal (honouring Options.ClockSkew).
 type ClaimsMapper func(context.Context, jwt.MapClaims) (authentication.Principal, error)
 
 // Options configures a signed JWT verifier.
 type Options struct {
-	Issuer        string
-	Audiences     []string
-	Algorithms    []string
-	Keys          KeySource
-	ClaimsMapper  ClaimsMapper
-	Clock         func() time.Time
-	ClockSkew     time.Duration
+	// Issuer is the exact required "iss" claim. Required.
+	Issuer string
+	// Audiences lists accepted "aud" values; a token must name at least one.
+	// Required, without duplicates.
+	Audiences []string
+	// Algorithms lists accepted JWS "alg" values, for example "RS256" or
+	// "EdDSA". Required, without duplicates. "none" is always rejected.
+	Algorithms []string
+	// Keys resolves the verification key for a token's "kid". Required.
+	Keys KeySource
+	// ClaimsMapper maps verified claims to a principal. The default maps
+	// "iss" and "sub" to ID "<iss>|<sub>", "iat" and "exp" to the lifetime,
+	// and sets Methods to ["jwt"].
+	ClaimsMapper ClaimsMapper
+	// Clock returns the verification time; its result is converted to UTC.
+	// Defaults to time.Now.
+	Clock func() time.Time
+	// ClockSkew is the tolerated clock difference between issuer and
+	// verifier. Zero means no tolerance.
+	ClockSkew time.Duration
+	// MaxTokenBytes bounds the accepted token size. Defaults to 32 KiB.
 	MaxTokenBytes int
-	MaxLifetime   time.Duration
+	// MaxLifetime bounds "exp - iat". Required and positive.
+	MaxLifetime time.Duration
 }
 
-// Verifier authenticates signed JWT credentials.
+// Verifier authenticates signed JWT credentials. It is safe for concurrent
+// use; its KeySource and ClaimsMapper must be too.
 type Verifier struct {
 	issuer        string
 	audiences     []string
@@ -53,7 +85,8 @@ type Verifier struct {
 
 var _ authentication.Authenticator = (*Verifier)(nil)
 
-// NewVerifier returns a strict signed JWT verifier.
+// NewVerifier returns a strict signed JWT verifier. It returns
+// authentication.ErrInvalidCredential when options are incomplete or invalid.
 func NewVerifier(options Options) (*Verifier, error) {
 	if invalidText(options.Issuer) || len(options.Audiences) == 0 || len(options.Algorithms) == 0 || options.Keys == nil {
 		return nil, authentication.ErrInvalidCredential
@@ -100,6 +133,9 @@ func NewVerifier(options Options) (*Verifier, error) {
 }
 
 // Authenticate verifies a JWT credential and returns the mapped principal.
+// Credentials of another kind, oversized or invalid tokens, and every
+// verification failure return authentication.ErrUnauthenticated, so a Verifier
+// belongs last in an authentication.Chain.
 func (v *Verifier) Authenticate(ctx context.Context, credential authentication.Credential) (authentication.Principal, error) {
 	if credential.Kind != "jwt" || len(credential.Token) == 0 || len(credential.Token) > v.maxTokenBytes {
 		return authentication.Principal{}, authentication.ErrUnauthenticated

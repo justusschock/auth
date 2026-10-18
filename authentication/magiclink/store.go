@@ -23,7 +23,12 @@ type Record struct {
 	Purpose     string
 }
 
-// Store persists magic-link state and must consume records atomically.
+// Store persists magic-link state.
+//
+// Create must fail with authentication.ErrReplay when the digest exists.
+// Consume must atomically remove and return the record for a digest, and
+// return authentication.ErrReplay when none exists, so that concurrent
+// callers cannot both consume it.
 type Store interface {
 	Create(context.Context, Record) error
 	Consume(context.Context, [32]byte) (Record, error)
@@ -36,10 +41,12 @@ type MemoryStore struct {
 	records map[[32]byte]Record
 }
 
+// NewMemoryStore returns an empty memory-backed store.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{records: make(map[[32]byte]Record)}
 }
 
+// Create stores a valid record unless its digest is already present.
 func (s *MemoryStore) Create(ctx context.Context, record Record) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -56,6 +63,7 @@ func (s *MemoryStore) Create(ctx context.Context, record Record) error {
 	return nil
 }
 
+// Consume atomically removes and returns the record for digest.
 func (s *MemoryStore) Consume(ctx context.Context, digest [32]byte) (Record, error) {
 	if err := ctx.Err(); err != nil {
 		return Record{}, err

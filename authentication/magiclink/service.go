@@ -1,3 +1,12 @@
+// Package magiclink issues and consumes single-use, short-lived login links.
+//
+// A link carries a 256-bit random token (base64url, 43 characters). Only its
+// SHA-256 digest is stored, together with the principal it authenticates, the
+// exact registered redirect URI, the issue and expiry times and an optional
+// purpose. Consume removes the record atomically before any other check, so a
+// token is accepted at most once even when it is presented concurrently, and
+// an expired or otherwise invalid token is burned rather than left for retry.
+// Link lifetimes are bounded to 15 minutes.
 package magiclink
 
 import (
@@ -19,22 +28,38 @@ const (
 	maxTTL     = 15 * time.Minute
 )
 
+// Options configures a Service.
 type Options struct {
-	Store        Store
-	BaseURL      string
+	// Store persists link records. Required.
+	Store Store
+	// BaseURL is the https URL the token is appended to as the "token"
+	// query parameter. Required.
+	BaseURL string
+	// RedirectURIs lists the exact https redirect URIs a link may carry.
+	// Required, without duplicates.
 	RedirectURIs []string
-	TTL          time.Duration
-	Random       io.Reader
-	Clock        func() time.Time
-	Purpose      string
+	// TTL is the link lifetime: positive and at most 15 minutes.
+	TTL time.Duration
+	// Random supplies token entropy. Defaults to crypto/rand.Reader; any
+	// replacement must be cryptographically secure.
+	Random io.Reader
+	// Clock returns the current time used for issue and expiry checks; its
+	// result is converted to UTC. Defaults to time.Now.
+	Clock func() time.Time
+	// Purpose is an optional label (at most 256 bytes) stored with records.
+	Purpose string
 }
 
+// Link is an issued magic link. Token is the raw secret; deliver URL to the
+// user and do not log or persist either.
 type Link struct {
 	URL       *url.URL
 	Token     string
 	ExpiresAt time.Time
 }
 
+// Service issues and consumes magic links. It is safe for concurrent use
+// when its Store is.
 type Service struct {
 	store        Store
 	baseURL      *url.URL
@@ -45,6 +70,9 @@ type Service struct {
 	purpose      string
 }
 
+// NewService validates options and returns a Service. It returns
+// authentication.ErrInvalidCredential or authentication.ErrInvalidCallback
+// for invalid options.
 func NewService(options Options) (*Service, error) {
 	if options.Store == nil {
 		return nil, authentication.ErrInvalidCredential
@@ -82,6 +110,10 @@ func NewService(options Options) (*Service, error) {
 	}, nil
 }
 
+// Issue creates a link for a currently valid principal and one of the
+// registered redirect URIs. It returns authentication.ErrInvalidCallback for
+// an unregistered redirect URI and authentication.ErrInvalidPrincipal for an
+// invalid or expired principal.
 func (s *Service) Issue(ctx context.Context, principal authentication.Principal, redirectURI string) (Link, error) {
 	if err := ctx.Err(); err != nil {
 		return Link{}, err
@@ -117,6 +149,12 @@ func (s *Service) Issue(ctx context.Context, principal authentication.Principal,
 	return Link{URL: linkURL, Token: token, ExpiresAt: expiresAt}.Clone(), nil
 }
 
+// Consume atomically consumes token and returns its principal. It returns
+// authentication.ErrInvalidCredential for a malformed token,
+// authentication.ErrReplay for an unknown or already consumed token,
+// authentication.ErrExpired once the link's TTL has elapsed and
+// authentication.ErrUnauthenticated for any other failure. Store errors are
+// never returned verbatim.
 func (s *Service) Consume(ctx context.Context, token string) (authentication.Principal, error) {
 	if err := ctx.Err(); err != nil {
 		return authentication.Principal{}, err
@@ -144,6 +182,7 @@ func (s *Service) Consume(ctx context.Context, token string) (authentication.Pri
 	return record.Principal.Clone(), nil
 }
 
+// Clone returns an independently owned link.
 func (l Link) Clone() Link {
 	clone := l
 	clone.URL = cloneURL(l.URL)

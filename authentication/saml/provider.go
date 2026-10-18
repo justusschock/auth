@@ -1,3 +1,21 @@
+// Package saml authenticates SAML 2.0 Web Browser SSO responses (HTTP-POST
+// binding) for service-provider initiated logins, as an
+// authentication.FederatedProvider.
+//
+// Begin sends a signed (RSA-SHA256) AuthnRequest with the HTTP-Redirect
+// binding to the single registered ACS URL and stores the request ID and an
+// independent RelayState through a caller-owned RequestStore. Complete
+// consumes that request atomically, then accepts only a response that:
+// is at most Options.MaxResponseBytes, round-trips as XML, has bounded depth
+// and element count, contains exactly one unencrypted assertion and unique
+// IDs, is signed (response or assertion) by a certificate from the IdP
+// metadata, and whose issuer, destination, InResponseTo, audience, bearer
+// subject confirmation, conditions and issue instants all match within
+// Options.AllowedClockSkew. IdP-initiated logins are rejected.
+//
+// Time checks use this package's own validation with Options.Clock (default
+// time.Now) rather than the process-global clock and skew variables of
+// github.com/crewjam/saml.
 package saml
 
 import (
@@ -46,7 +64,10 @@ type Request struct {
 	ExpiresAt  time.Time
 }
 
-// RequestStore persists callback state and must consume it atomically.
+// RequestStore persists callback state. Put must fail with
+// authentication.ErrReplay when the ID exists. Consume must atomically remove
+// and return the request and return authentication.ErrReplay when none
+// exists, so that concurrent callbacks cannot both consume it.
 type RequestStore interface {
 	Put(context.Context, Request) error
 	Consume(context.Context, string) (Request, error)
@@ -60,10 +81,12 @@ type MemoryRequestStore struct {
 	requests map[string]Request
 }
 
+// NewMemoryRequestStore returns an empty memory-backed request store.
 func NewMemoryRequestStore() *MemoryRequestStore {
 	return &MemoryRequestStore{requests: make(map[string]Request)}
 }
 
+// Put stores a valid request unless its ID is already present.
 func (s *MemoryRequestStore) Put(ctx context.Context, request Request) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -81,6 +104,7 @@ func (s *MemoryRequestStore) Put(ctx context.Context, request Request) error {
 	return nil
 }
 
+// Consume atomically removes and returns the request with id.
 func (s *MemoryRequestStore) Consume(ctx context.Context, id string) (Request, error) {
 	if err := ctx.Err(); err != nil {
 		return Request{}, err
@@ -106,21 +130,45 @@ type Claims struct {
 // ClaimsMapper maps verified SAML claims to a protocol-neutral principal.
 type ClaimsMapper func(context.Context, Claims) (authentication.Principal, error)
 
+// Options configures a Provider. The provider deep-copies keys, certificates
+// and metadata, so later changes by the caller have no effect.
 type Options struct {
-	Name             string
-	EntityID         *url.URL
-	MetadataURL      *url.URL
-	ACSURL           *url.URL
-	IDPMetadata      *crewjamsaml.EntityDescriptor
-	Key              *rsa.PrivateKey
-	Certificate      *x509.Certificate
-	RequestStore     RequestStore
-	Clock            func() time.Time
+	// Name identifies the provider (lower-cased and trimmed). Required.
+	Name string
+	// EntityID, MetadataURL and ACSURL are the service provider's https
+	// URLs. Required.
+	EntityID    *url.URL
+	MetadataURL *url.URL
+	ACSURL      *url.URL
+	// IDPMetadata describes the identity provider. It must have an https
+	// entity ID, exactly one HTTP-Redirect SSO endpoint and at least one
+	// currently valid signing certificate, and must not be past ValidUntil.
+	IDPMetadata *crewjamsaml.EntityDescriptor
+	// Key and Certificate are the service provider's signing key pair: RSA
+	// of at least 2048 bits with a currently valid certificate. Required.
+	Key         *rsa.PrivateKey
+	Certificate *x509.Certificate
+	// RequestStore persists pending requests. Required.
+	RequestStore RequestStore
+	// Clock returns the current time used to validate key, certificate and
+	// metadata lifetimes, request expiry and assertion conditions; its result
+	// is converted to UTC. Defaults to time.Now.
+	Clock func() time.Time
+	// MaxResponseBytes bounds the decoded response. Zero selects the default
+	// of 1 MiB.
 	MaxResponseBytes int
+	// AllowedClockSkew is the tolerated clock difference with the identity
+	// provider. Zero selects the default of two minutes; negative values are
+	// rejected.
 	AllowedClockSkew time.Duration
-	Mapper           ClaimsMapper
+	// Mapper maps verified claims to a principal. The default uses ID
+	// "<idp entity ID>|<NameID>", copies attributes into Traits and sets
+	// Methods to ["saml"].
+	Mapper ClaimsMapper
 }
 
+// Provider is a SAML 2.0 service provider for one identity provider. It is
+// safe for concurrent use when its RequestStore and Mapper are.
 type Provider struct {
 	name             string
 	entityID         string
@@ -137,6 +185,8 @@ type Provider struct {
 
 var _ authentication.FederatedProvider = (*Provider)(nil)
 
+// New validates options and returns a Provider. It returns
+// authentication.ErrInvalidCredential for invalid options.
 func New(options Options) (*Provider, error) {
 	name := strings.ToLower(strings.TrimSpace(options.Name))
 	clock := options.Clock
@@ -201,10 +251,13 @@ func New(options Options) (*Provider, error) {
 	}, nil
 }
 
+// Name returns the normalized provider name.
 func (p *Provider) Name() string {
 	return p.name
 }
 
+// Begin starts a login. request.RedirectURI must equal the ACS URL. The
+// pending request expires after ten minutes.
 func (p *Provider) Begin(ctx context.Context, request authentication.BeginRequest) (authentication.Redirect, error) {
 	if err := ctx.Err(); err != nil {
 		return authentication.Redirect{}, err
@@ -237,6 +290,11 @@ func (p *Provider) Begin(ctx context.Context, request authentication.BeginReques
 	return authentication.Redirect{URL: cloneURL(redirectURL), StateID: authnRequest.ID, ExpiresAt: expiresAt}.Clone(), nil
 }
 
+// Complete consumes the pending request and verifies the SAML response in
+// callback.SAMLResponse (base64). It returns authentication.ErrInvalidCallback
+// for malformed or oversized callbacks, authentication.ErrReplay for unknown
+// or reused requests, authentication.ErrExpired for expired requests and
+// authentication.ErrUnauthenticated for every verification failure.
 func (p *Provider) Complete(ctx context.Context, callback authentication.Callback) (authentication.Principal, error) {
 	if err := ctx.Err(); err != nil {
 		return authentication.Principal{}, err
@@ -409,7 +467,7 @@ func validateResponseStructure(value []byte) error {
 	ids := make(map[string]struct{})
 	for {
 		token, err := decoder.Token()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
