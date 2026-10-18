@@ -8,6 +8,14 @@ While the major version is `0`, a minor release may break the API.
 
 ## [Unreleased]
 
+### Added
+
+- `authorization/cedar`: `Policy`, `Effect` (`Permit`, `Forbid`) and
+  `Policies`, a policy source that builds Cedar policies from the same
+  principal, action and resource values a request uses. Every policy names
+  a resource type; every entity is validated and every ID escaped
+  (ADR-0012).
+
 ### Changed
 
 - **Breaking:** `authorization.Request` uses the distinct types
