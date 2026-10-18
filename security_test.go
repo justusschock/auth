@@ -161,10 +161,16 @@ func FuzzAuthorizationHeader(f *testing.F) {
 	})
 }
 
+// textPolicies serves fixed Cedar policy text, for policies with conditions
+// that cedar.Policy cannot express.
+type textPolicies string
+
+func (p textPolicies) Policies(context.Context) ([]byte, error) { return []byte(p), nil }
+
 // FR-AUTH-26
 func FuzzCedarContext(f *testing.F) {
 	engine, err := authcedar.New(authcedar.Options{
-		Policies: examplePolicies(`permit(principal, action, resource) when { context.enabled };`),
+		Policies: textPolicies(`permit(principal, action, resource) when { context.enabled };`),
 		Entities: exampleEntities{},
 	})
 	if err != nil {
@@ -192,9 +198,9 @@ func FuzzCedarContext(f *testing.F) {
 			}
 		}
 		decision, err := engine.Authorize(context.Background(), authorization.Request{
-			Principal: authorization.Entity{Type: "User", ID: "fuzzer"},
-			Action:    authorization.Entity{Type: "Action", ID: "read"},
-			Resource:  authorization.Entity{Type: "Document", ID: "one"},
+			Principal: authorization.Principal{Type: "User", ID: "fuzzer"},
+			Action:    authorization.Action{ID: "read"},
+			Resource:  authorization.Resource{Type: "Document", ID: "one"},
 			Context:   map[string]any{"enabled": true, "value": value},
 		})
 		if err != nil && decision.Allowed {

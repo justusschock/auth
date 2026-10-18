@@ -152,9 +152,10 @@ func TestEngineValidatesEntityIdentifiers(t *testing.T) {
 	engine := newEngine(t, staticPolicies(basicPolicies), emptyEntities{})
 	valid := request("read", map[string]any{"blocked": false})
 	cases := []authorization.Request{
-		{Principal: authorization.Entity{Type: "", ID: "alice"}, Action: valid.Action, Resource: valid.Resource},
-		{Principal: valid.Principal, Action: authorization.Entity{Type: "Action", ID: strings.Repeat("a", 257)}, Resource: valid.Resource},
-		{Principal: valid.Principal, Action: valid.Action, Resource: authorization.Entity{Type: "Doc\x00ument", ID: "doc-1"}},
+		{Principal: authorization.Principal{Type: "", ID: "alice"}, Action: valid.Action, Resource: valid.Resource},
+		{Principal: valid.Principal, Action: authorization.Action{}, Resource: valid.Resource},
+		{Principal: valid.Principal, Action: authorization.Action{ID: strings.Repeat("a", 257)}, Resource: valid.Resource},
+		{Principal: valid.Principal, Action: valid.Action, Resource: authorization.Resource{Type: "Doc\x00ument", ID: "doc-1"}},
 	}
 	for _, req := range cases {
 		decision, err := engine.Authorize(context.Background(), req)
@@ -261,9 +262,9 @@ func newEngine(t *testing.T, policies authorization.PolicySource, entities autho
 
 func request(action string, contextValues map[string]any) authorization.Request {
 	return authorization.Request{
-		Principal: authorization.Entity{Type: "User", ID: "alice"},
-		Action:    authorization.Entity{Type: "Action", ID: action},
-		Resource:  authorization.Entity{Type: "Document", ID: "doc-1"},
+		Principal: authorization.Principal{Type: "User", ID: "alice"},
+		Action:    authorization.Action{ID: action},
+		Resource:  authorization.Resource{Type: "Document", ID: "doc-1"},
 		Context:   contextValues,
 	}
 }

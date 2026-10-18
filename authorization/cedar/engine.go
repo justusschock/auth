@@ -25,6 +25,9 @@ import (
 	"github.com/justusschock/auth/authorization"
 )
 
+// actionType is the Cedar entity type of every authorization.Action.
+const actionType = "Action"
+
 const (
 	maxPolicyBytes  = 1 << 20
 	maxEntityBytes  = 1 << 20
@@ -64,15 +67,15 @@ func (e *Engine) Authorize(ctx context.Context, request authorization.Request) (
 	if err := ctx.Err(); err != nil {
 		return authorization.Decision{}, err
 	}
-	principal, err := entityUID(request.Principal)
+	principal, err := entityUID(request.Principal.Type, request.Principal.ID)
 	if err != nil {
 		return authorization.Decision{}, err
 	}
-	action, err := entityUID(request.Action)
+	action, err := entityUID(actionType, request.Action.ID)
 	if err != nil {
 		return authorization.Decision{}, err
 	}
-	resource, err := entityUID(request.Resource)
+	resource, err := entityUID(request.Resource.Type, request.Resource.ID)
 	if err != nil {
 		return authorization.Decision{}, err
 	}
@@ -142,11 +145,11 @@ func (e *Engine) Authorize(ctx context.Context, request authorization.Request) (
 	return result, nil
 }
 
-func entityUID(entity authorization.Entity) (cedarsdk.EntityUID, error) {
-	if !validEntityType(entity.Type) || !validText(entity.ID, maxEntityID) {
+func entityUID(entityType, id string) (cedarsdk.EntityUID, error) {
+	if !validEntityType(entityType) || !validText(id, maxEntityID) {
 		return cedarsdk.EntityUID{}, authorization.ErrInvalidRequest
 	}
-	return cedarsdk.NewEntityUID(cedarsdk.EntityType(entity.Type), cedarsdk.String(entity.ID)), nil
+	return cedarsdk.NewEntityUID(cedarsdk.EntityType(entityType), cedarsdk.String(id)), nil
 }
 
 func validEntityType(value string) bool {

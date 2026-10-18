@@ -17,11 +17,6 @@ type exampleKeys struct{ key []byte }
 
 func (k exampleKeys) Key(context.Context, string) (any, error) { return k.key, nil }
 
-// examplePolicies serves fixed Cedar policy text.
-type examplePolicies string
-
-func (p examplePolicies) Policies(context.Context) ([]byte, error) { return []byte(p), nil }
-
 // exampleEntities serves an empty entity list for every request.
 type exampleEntities struct{}
 
@@ -32,7 +27,7 @@ func (exampleEntities) Entities(context.Context, authorization.Request) ([]byte,
 // Example authenticates a JWT bearer token and authorizes the resulting
 // principal with a Cedar policy. Authentication and authorization are
 // independent; the caller maps the principal to an authorization entity.
-// FR-AUTH-25
+// FR-AUTH-25, FR-AUTH-28
 func Example() {
 	ctx := context.Background()
 	key := []byte("example-key-with-at-least-32-bytes")
@@ -74,9 +69,15 @@ func Example() {
 	}
 	fmt.Println("authenticated:", principal.ID)
 
-	// Authorization: Cedar policies evaluated per request, default deny.
+	// Authorization: Cedar policies evaluated per request, default deny. The
+	// policy is permit(principal == User::"alice", action == Action::"read", resource is Document);
+	alice := authorization.Principal{Type: "User", ID: "alice"}
+	read := authorization.Action{ID: "read"}
+	documents := authorization.Resource{Type: "Document"}
 	engine, err := authcedar.New(authcedar.Options{
-		Policies: examplePolicies(`permit(principal == User::"alice", action == Action::"read", resource);`),
+		Policies: authcedar.Policies{
+			{Effect: authcedar.Permit, Principal: &alice, Action: &read, Resource: documents},
+		},
 		Entities: exampleEntities{},
 	})
 	if err != nil {
@@ -84,9 +85,9 @@ func Example() {
 	}
 	for _, action := range []string{"read", "delete"} {
 		decision, err := engine.Authorize(ctx, authorization.Request{
-			Principal: authorization.Entity{Type: "User", ID: principal.Subject},
-			Action:    authorization.Entity{Type: "Action", ID: action},
-			Resource:  authorization.Entity{Type: "Document", ID: "report"},
+			Principal: authorization.Principal{Type: "User", ID: principal.Subject},
+			Action:    authorization.Action{ID: action},
+			Resource:  authorization.Resource{Type: "Document", ID: "report"},
 		})
 		if err != nil {
 			panic(err)
