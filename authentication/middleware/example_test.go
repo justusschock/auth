@@ -23,7 +23,7 @@ func (staticAuthenticator) Authenticate(_ context.Context, credential authentica
 func ExampleHTTP() {
 	app := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		principal, _ := authentication.PrincipalFromContext(r.Context())
-		fmt.Fprintf(w, "hello %s", principal.Subject)
+		_, _ = fmt.Fprintf(w, "hello %s", principal.Subject)
 	})
 	handler := middleware.HTTP(app, authentication.Chain(staticAuthenticator{}), middleware.WithRealm("example"))
 

@@ -1,0 +1,24 @@
+version: "2"
+
+linters:
+  # The standard set (errcheck, govet, ineffassign, staticcheck, unused) plus
+  # linters for error handling, spelling and HTTP response bodies.
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - misspell
+  exclusions:
+    rules:
+      # Security tests assert that authenticators return the exact, unwrapped
+      # sentinel (sanitized errors must not wrap backend or credential
+      # detail), so they compare errors with == on purpose.
+      - path: _test\.go
+        linters:
+          - errorlint
+        text: "comparing with [=!]= will fail on wrapped errors"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
