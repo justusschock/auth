@@ -15,6 +15,7 @@ import (
 
 	"github.com/justusschock/go-auth/authentication"
 	"github.com/justusschock/go-auth/authentication/device"
+	"github.com/justusschock/go-auth/internal/authtest"
 )
 
 const (
@@ -29,7 +30,7 @@ type tokenResponse struct {
 }
 
 // fakeServer is an in-memory RFC 8628 authorization server. It is served via
-// an http.RoundTripper so tests can run inside synctest bubbles.
+// an in-memory http.RoundTripper so tests can run inside synctest bubbles.
 type fakeServer struct {
 	t              *testing.T
 	mu             sync.Mutex
@@ -115,21 +116,8 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	_ = json.NewEncoder(w).Encode(body)
 }
 
-type handlerTransport struct{ handler http.Handler }
-
-func (t handlerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	if r.Body != nil {
-		defer func() { _ = r.Body.Close() }()
-	}
-	recorder := httptest.NewRecorder()
-	t.handler.ServeHTTP(recorder, r)
-	response := recorder.Result()
-	response.Request = r
-	return response, nil
-}
-
 func (s *fakeServer) client() *http.Client {
-	return &http.Client{Transport: handlerTransport{handler: s}}
+	return authtest.Client(s)
 }
 
 func explicitOptions(s *fakeServer) device.Options {
