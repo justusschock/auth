@@ -15,6 +15,7 @@ func (f authenticatorFunc) Authenticate(ctx context.Context, credential authenti
 	return f(ctx, credential)
 }
 
+// FR-AUTH-02, NFR-AUTH-07
 func TestPrincipalContextRoundTripIsIsolated(t *testing.T) {
 	t.Parallel()
 	principal := authentication.Principal{
@@ -39,6 +40,7 @@ func TestPrincipalContextRoundTripIsIsolated(t *testing.T) {
 	}
 }
 
+// FR-AUTH-02
 func TestChainUsesFirstSupportingAuthenticator(t *testing.T) {
 	t.Parallel()
 	calls := []string{}
@@ -73,6 +75,7 @@ func TestChainUsesFirstSupportingAuthenticator(t *testing.T) {
 	}
 }
 
+// FR-AUTH-02
 func TestChainFailsClosed(t *testing.T) {
 	t.Parallel()
 	credential := authentication.Credential{Kind: authentication.CredentialKindBearer, Token: []byte("token")}

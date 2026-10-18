@@ -26,6 +26,7 @@ import (
 	authcedar "github.com/justusschock/go-auth/authorization/cedar"
 )
 
+// NFR-AUTH-01
 func FuzzJWTBytes(f *testing.F) {
 	verifier, err := authjwt.NewVerifier(authjwt.Options{
 		Issuer:      "https://issuer.example",
@@ -48,6 +49,7 @@ func FuzzJWTBytes(f *testing.F) {
 	})
 }
 
+// FR-AUTH-16
 func FuzzSAMLResponseBytes(f *testing.F) {
 	now := time.Now().UTC().Truncate(time.Second)
 	provider, store := fuzzSAMLProvider(f, now)
@@ -72,6 +74,7 @@ func FuzzSAMLResponseBytes(f *testing.F) {
 	})
 }
 
+// FR-AUTH-17
 func FuzzMagicLinkTokens(f *testing.F) {
 	service, err := magiclink.NewService(magiclink.Options{
 		Store:        magiclink.NewMemoryStore(),
@@ -93,6 +96,7 @@ func FuzzMagicLinkTokens(f *testing.F) {
 	})
 }
 
+// NFR-AUTH-01
 func FuzzAPITokens(f *testing.F) {
 	manager, err := apitoken.NewManager(apitoken.Options{
 		Store:  apitoken.NewMemoryStore(),
@@ -131,6 +135,7 @@ func FuzzAPITokens(f *testing.F) {
 	})
 }
 
+// FR-AUTH-09
 func FuzzAuthorizationHeader(f *testing.F) {
 	f.Add("Bearer dtc_token")
 	f.Add("bearer eyJh.e30.sig")
@@ -157,6 +162,7 @@ func FuzzAuthorizationHeader(f *testing.F) {
 	})
 }
 
+// FR-AUTH-26
 func FuzzCedarContext(f *testing.F) {
 	engine, err := authcedar.New(authcedar.Options{
 		Policies: examplePolicies(`permit(principal, action, resource) when { context.enabled };`),

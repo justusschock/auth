@@ -58,6 +58,7 @@ func bearer(token string) authentication.Credential {
 	return authentication.Credential{Kind: authentication.CredentialKindBearer, Token: []byte(token)}
 }
 
+// FR-AUTH-05
 func TestIssueAndAuthenticateRoundTrip(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := apitoken.NewMemoryStore()
@@ -108,6 +109,7 @@ func TestIssueAndAuthenticateRoundTrip(t *testing.T) {
 	})
 }
 
+// FR-AUTH-06
 func TestAuthenticateWithoutScopesSetsEmptyScopeTrait(t *testing.T) {
 	manager := newManager(t, apitoken.NewMemoryStore(), func(o *apitoken.Options) { o.Pepper = nil })
 	request := defaultRequest()
@@ -124,6 +126,7 @@ func TestAuthenticateWithoutScopesSetsEmptyScopeTrait(t *testing.T) {
 	}
 }
 
+// FR-AUTH-05, NFR-AUTH-02
 func TestStoreNeverHoldsRawTokenAndPepperBindsDigest(t *testing.T) {
 	store := apitoken.NewMemoryStore()
 	manager := newManager(t, store, nil)
@@ -150,6 +153,7 @@ func TestStoreNeverHoldsRawTokenAndPepperBindsDigest(t *testing.T) {
 	}
 }
 
+// FR-AUTH-05
 func TestAuthenticateRejectsTamperedTokens(t *testing.T) {
 	manager := newManager(t, apitoken.NewMemoryStore(), nil)
 	token, _ := issue(t, manager, defaultRequest())
@@ -200,6 +204,7 @@ func TestAuthenticateRejectsTamperedTokens(t *testing.T) {
 	}
 }
 
+// FR-AUTH-07
 func TestAuthenticateDeclinesForeignCredentials(t *testing.T) {
 	manager := newManager(t, apitoken.NewMemoryStore(), nil)
 	token, _ := issue(t, manager, defaultRequest())
@@ -220,6 +225,7 @@ func TestAuthenticateDeclinesForeignCredentials(t *testing.T) {
 	}
 }
 
+// FR-AUTH-06
 func TestAuthenticateExpiry(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		manager := newManager(t, apitoken.NewMemoryStore(), nil)
@@ -238,6 +244,7 @@ func TestAuthenticateExpiry(t *testing.T) {
 	})
 }
 
+// FR-AUTH-06
 func TestLastUsedIsThrottled(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := apitoken.NewMemoryStore()
@@ -276,6 +283,7 @@ func TestLastUsedIsThrottled(t *testing.T) {
 	})
 }
 
+// FR-AUTH-06
 func TestLastUsedCanBeDisabled(t *testing.T) {
 	store := apitoken.NewMemoryStore()
 	manager := newManager(t, store, func(o *apitoken.Options) { o.LastUsedInterval = -1 })
@@ -289,6 +297,7 @@ func TestLastUsedCanBeDisabled(t *testing.T) {
 	}
 }
 
+// FR-AUTH-06
 func TestRevokeAndList(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := apitoken.NewMemoryStore()
@@ -347,6 +356,7 @@ func TestRevokeAndList(t *testing.T) {
 	})
 }
 
+// FR-AUTH-05
 func TestNewManagerValidatesOptions(t *testing.T) {
 	store := apitoken.NewMemoryStore()
 	tests := map[string]apitoken.Options{
@@ -369,6 +379,7 @@ func TestNewManagerValidatesOptions(t *testing.T) {
 	}
 }
 
+// FR-AUTH-05
 func TestIssueValidatesRequest(t *testing.T) {
 	manager := newManager(t, apitoken.NewMemoryStore(), func(o *apitoken.Options) { o.MaxTTL = 24 * time.Hour })
 	tests := map[string]func(*apitoken.IssueRequest){
@@ -401,6 +412,7 @@ func TestIssueValidatesRequest(t *testing.T) {
 	}
 }
 
+// NFR-AUTH-04
 func TestIssueFailsClosedOnRandomnessFailure(t *testing.T) {
 	manager := newManager(t, apitoken.NewMemoryStore(), func(o *apitoken.Options) { o.Random = io.LimitReader(bytes.NewReader(nil), 0) })
 	if token, _, err := manager.Issue(context.Background(), defaultRequest()); err != authentication.ErrInvalidCredential || token != "" {
@@ -428,6 +440,7 @@ func (s *failingStore) TouchLastUsed(ctx context.Context, id string, at time.Tim
 	return s.MemoryStore.TouchLastUsed(ctx, id, at)
 }
 
+// NFR-AUTH-01
 func TestStoreErrorsAreSanitized(t *testing.T) {
 	store := &failingStore{MemoryStore: apitoken.NewMemoryStore()}
 	manager := newManager(t, store, nil)
@@ -454,6 +467,7 @@ func TestStoreErrorsAreSanitized(t *testing.T) {
 	}
 }
 
+// FR-AUTH-07
 func TestAuthenticateIsCompatibleWithChain(t *testing.T) {
 	manager := newManager(t, apitoken.NewMemoryStore(), nil)
 	token, _ := issue(t, manager, defaultRequest())

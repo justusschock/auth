@@ -6,6 +6,7 @@ import (
 	"testing"
 )
 
+// NFR-AUTH-05
 func TestAuthenticationAndAuthorizationAreIndependent(t *testing.T) {
 	cases := []struct {
 		packages  string
@@ -32,6 +33,7 @@ func TestAuthenticationAndAuthorizationAreIndependent(t *testing.T) {
 // TestDirectDependenciesAreAllowlisted keeps the library's direct imports to
 // the third-party modules accepted in docs/adr (ADR-0003). Adding one needs
 // an ADR and an entry here.
+// NFR-AUTH-05
 func TestDirectDependenciesAreAllowlisted(t *testing.T) {
 	allowed := map[string]string{
 		"github.com/beevik/etree":                             "saml",
@@ -62,6 +64,7 @@ func TestDirectDependenciesAreAllowlisted(t *testing.T) {
 
 // TestMiddlewareUsesOnlyStandardLibrary keeps transport middleware free of
 // protocol implementations and third-party dependencies.
+// NFR-AUTH-05
 func TestMiddlewareUsesOnlyStandardLibrary(t *testing.T) {
 	output, err := exec.Command("go", "list", "-deps", "-f", "{{if not .Standard}}{{.ImportPath}}{{end}}", "./authentication/middleware").CombinedOutput()
 	if err != nil {

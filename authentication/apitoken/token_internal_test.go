@@ -10,6 +10,7 @@ import (
 	"testing"
 )
 
+// FR-AUTH-05
 func FuzzParseToken(f *testing.F) {
 	f.Add("dtc_" + strings.Repeat("a", idChars) + "_" + strings.Repeat("a", secretChars))
 	f.Add("dtc_" + strings.Repeat("7", idChars) + "_" + strings.Repeat("7", secretChars))
@@ -36,6 +37,7 @@ func FuzzParseToken(f *testing.F) {
 	})
 }
 
+// NFR-AUTH-03
 func TestDigestsEqualIsExact(t *testing.T) {
 	a := digest(nil, "dtc_a")
 	for index := range a {
@@ -56,6 +58,7 @@ func TestDigestsEqualIsExact(t *testing.T) {
 // TestDigestComparisonsAreConstantTime asserts that production code compares
 // token digests only through crypto/subtle and never with variable-time
 // operators or helpers.
+// NFR-AUTH-03
 func TestDigestComparisonsAreConstantTime(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil {

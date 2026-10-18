@@ -153,6 +153,7 @@ func oauthError(code string) tokenResponse {
 	return tokenResponse{status: http.StatusBadRequest, body: map[string]any{"error": code, "error_description": "echo " + deviceCode}}
 }
 
+// FR-AUTH-19
 func TestStartAndPollHonorsPendingAndSlowDown(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		server := newFakeServer(t)
@@ -205,6 +206,7 @@ func TestStartAndPollHonorsPendingAndSlowDown(t *testing.T) {
 	})
 }
 
+// FR-AUTH-19
 func TestPollMapsTerminalErrors(t *testing.T) {
 	tests := map[string]struct {
 		response tokenResponse
@@ -251,6 +253,7 @@ func TestPollMapsTerminalErrors(t *testing.T) {
 	}
 }
 
+// FR-AUTH-19
 func TestPollStopsAtAuthorizationExpiry(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		server := newFakeServer(t)
@@ -273,6 +276,7 @@ func TestPollStopsAtAuthorizationExpiry(t *testing.T) {
 	})
 }
 
+// FR-AUTH-19
 func TestPollReturnsCallerContextError(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		server := newFakeServer(t)
@@ -292,6 +296,7 @@ func TestPollReturnsCallerContextError(t *testing.T) {
 	})
 }
 
+// FR-AUTH-19
 func TestPollDefaultsIntervalAndSendsClientSecret(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		server := newFakeServer(t)
@@ -317,6 +322,7 @@ func TestPollDefaultsIntervalAndSendsClientSecret(t *testing.T) {
 	})
 }
 
+// FR-AUTH-20
 func TestStartRejectsUnsafeResponses(t *testing.T) {
 	tests := map[string]func(map[string]any){
 		"missing device code":      func(r map[string]any) { delete(r, "device_code") },
@@ -351,6 +357,7 @@ func TestStartRejectsUnsafeResponses(t *testing.T) {
 	}
 }
 
+// FR-AUTH-20
 func TestStartMapsOAuthErrors(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		server := newFakeServer(t)
@@ -369,6 +376,7 @@ func TestStartMapsOAuthErrors(t *testing.T) {
 	})
 }
 
+// FR-AUTH-19
 func TestNewWithDiscovery(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		server := newFakeServer(t)
@@ -387,6 +395,7 @@ func TestNewWithDiscovery(t *testing.T) {
 	})
 }
 
+// FR-AUTH-20
 func TestNewDiscoveryFailures(t *testing.T) {
 	tests := map[string]func(map[string]any){
 		"no device endpoint": func(d map[string]any) { delete(d, "device_authorization_endpoint") },
@@ -406,6 +415,7 @@ func TestNewDiscoveryFailures(t *testing.T) {
 	}
 }
 
+// FR-AUTH-20
 func TestNewValidatesOptions(t *testing.T) {
 	t.Parallel()
 	base := device.Options{DeviceAuthURL: issuer + "/device/code", TokenURL: issuer + "/token", ClientID: "dtc-cli"}
@@ -432,6 +442,7 @@ func TestNewValidatesOptions(t *testing.T) {
 	}
 }
 
+// FR-AUTH-20
 func TestPollRejectsInvalidAuthorization(t *testing.T) {
 	t.Parallel()
 	client := newClient(t, explicitOptions(newFakeServer(t)))
@@ -441,6 +452,7 @@ func TestPollRejectsInvalidAuthorization(t *testing.T) {
 }
 
 // TestLoopbackServer exercises a real HTTP server outside a synctest bubble.
+// FR-AUTH-19
 func TestLoopbackServer(t *testing.T) {
 	t.Parallel()
 	server := newFakeServer(t)

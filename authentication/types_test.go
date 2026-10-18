@@ -11,6 +11,7 @@ import (
 	"github.com/justusschock/go-auth/authentication"
 )
 
+// FR-AUTH-01
 func TestValidatePrincipalRequiresIdentityAndCurrentUTCLifetime(t *testing.T) {
 	t.Parallel()
 
@@ -56,6 +57,7 @@ func TestValidatePrincipalRequiresIdentityAndCurrentUTCLifetime(t *testing.T) {
 	}
 }
 
+// FR-AUTH-01
 func TestValidatePrincipalRejectsUnboundedOrMalformedTraitsAndMethods(t *testing.T) {
 	t.Parallel()
 
@@ -102,6 +104,7 @@ func TestValidatePrincipalRejectsUnboundedOrMalformedTraitsAndMethods(t *testing
 	}
 }
 
+// FR-AUTH-01
 func TestPrincipalCloneOwnsNestedStateAndSortsMethods(t *testing.T) {
 	t.Parallel()
 
@@ -130,6 +133,7 @@ func TestPrincipalCloneOwnsNestedStateAndSortsMethods(t *testing.T) {
 	}
 }
 
+// FR-AUTH-01
 func TestCredentialAndRequestClonesOwnMutableState(t *testing.T) {
 	t.Parallel()
 
@@ -167,6 +171,7 @@ func TestCredentialAndRequestClonesOwnMutableState(t *testing.T) {
 	}
 }
 
+// NFR-AUTH-01
 func TestAuthenticationErrorsDoNotContainCredentials(t *testing.T) {
 	t.Parallel()
 

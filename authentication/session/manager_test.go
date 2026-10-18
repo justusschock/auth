@@ -18,6 +18,7 @@ import (
 	coordination "github.com/justusschock/go-distributed-coordination"
 )
 
+// FR-AUTH-21
 func TestCreateStoresDigestOnlyAndReturnsCopiedData(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		now := time.Now().UTC()
@@ -76,6 +77,7 @@ func TestCreateStoresDigestOnlyAndReturnsCopiedData(t *testing.T) {
 	})
 }
 
+// FR-AUTH-21
 func TestCreateRejectsInvalidBoundsAndRandomFailure(t *testing.T) {
 	now := time.Now().UTC()
 	for name, options := range map[string]session.Options{
@@ -110,6 +112,7 @@ func TestCreateRejectsInvalidBoundsAndRandomFailure(t *testing.T) {
 	}
 }
 
+// FR-AUTH-22
 func TestRotateUsesLeaseAndHasExactlyOneConcurrentWinner(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		now := time.Now().UTC()
@@ -176,6 +179,7 @@ func TestRotateUsesLeaseAndHasExactlyOneConcurrentWinner(t *testing.T) {
 	})
 }
 
+// FR-AUTH-22
 func TestRotateFailsClosedOnLeaseAndStoreAmbiguity(t *testing.T) {
 	for name, setup := range map[string]func(*recordingCoordinator, *observingStore){
 		"canceled acquire": func(c *recordingCoordinator, _ *observingStore) {
@@ -229,6 +233,7 @@ func TestRotateFailsClosedOnLeaseAndStoreAmbiguity(t *testing.T) {
 	}
 }
 
+// FR-AUTH-21
 func TestValidateAndRotateRejectCorruptDurableRecords(t *testing.T) {
 	token := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))
 	baseAt := func(now time.Time) session.Session {
@@ -292,6 +297,7 @@ func TestValidateAndRotateRejectCorruptDurableRecords(t *testing.T) {
 	}
 }
 
+// FR-AUTH-21
 func TestValidateAndRotateCheckDurableRevocationAndExpiry(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		now := time.Now().UTC()
@@ -356,6 +362,7 @@ func TestValidateAndRotateCheckDurableRevocationAndExpiry(t *testing.T) {
 	})
 }
 
+// FR-AUTH-22
 func TestSessionStoresAreConcurrencySafeAndFenced(t *testing.T) {
 	now := time.Unix(1500, 0).UTC()
 	store := session.NewMemoryStore()
@@ -395,6 +402,7 @@ func TestSessionStoresAreConcurrencySafeAndFenced(t *testing.T) {
 	}
 }
 
+// FR-AUTH-22
 func TestMemoryStoreCompareAndSwapRejectsInvalidTransitions(t *testing.T) {
 	now := time.Unix(1510, 0).UTC()
 	initial := session.Session{

@@ -10,6 +10,7 @@ import (
 	cache "github.com/justusschock/go-cache"
 )
 
+// FR-AUTH-24
 func TestCacheFallsBackToLoaderWhenCacheMissOrOutage(t *testing.T) {
 	ctx := context.Background()
 	document := authmetadata.Document{
@@ -37,6 +38,7 @@ func TestCacheFallsBackToLoaderWhenCacheMissOrOutage(t *testing.T) {
 	}
 }
 
+// FR-AUTH-24
 func TestCacheRejectsMismatchedIssuerAndInsecureEndpoints(t *testing.T) {
 	for name, doc := range map[string]authmetadata.Document{
 		"issuer mismatch": {
@@ -63,6 +65,7 @@ func TestCacheRejectsMismatchedIssuerAndInsecureEndpoints(t *testing.T) {
 	}
 }
 
+// FR-AUTH-24
 func TestCacheReloadsInvalidCachedDocument(t *testing.T) {
 	valid := authmetadata.Document{
 		Issuer: "https://id.example", AuthURL: "https://id.example/authorize", TokenURL: "https://id.example/token", JWKSURL: "https://id.example/keys",

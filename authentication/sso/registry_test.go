@@ -10,6 +10,7 @@ import (
 	"github.com/justusschock/go-auth/authentication/sso"
 )
 
+// FR-AUTH-23
 func TestRegistrySelectsExactNormalizedDomainsAndProviderNames(t *testing.T) {
 	work := fakeProvider{name: "work"}
 	partners := fakeProvider{name: "partners"}
@@ -35,6 +36,7 @@ func TestRegistrySelectsExactNormalizedDomainsAndProviderNames(t *testing.T) {
 	}
 }
 
+// FR-AUTH-23
 func TestRegistryRejectsDuplicateProvidersAndDomains(t *testing.T) {
 	for name, registrations := range map[string][]sso.Registration{
 		"duplicate provider": {
@@ -54,6 +56,7 @@ func TestRegistryRejectsDuplicateProvidersAndDomains(t *testing.T) {
 	}
 }
 
+// FR-AUTH-23
 func TestRegistryRejectsAmbiguousProviderNames(t *testing.T) {
 	for _, name := range []string{"alice@example.com", "path/provider"} {
 		_, err := sso.NewRegistry([]sso.Registration{{Provider: fakeProvider{name: name}}})

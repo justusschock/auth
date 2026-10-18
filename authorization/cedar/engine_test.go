@@ -18,6 +18,7 @@ const basicPolicies = `
 @id("blocked") forbid(principal, action, resource) when { context.blocked };
 `
 
+// FR-AUTH-25
 func TestEnginePermitsDefaultsToDenyAndHonorsForbid(t *testing.T) {
 	engine := newEngine(t, staticPolicies(basicPolicies), emptyEntities{})
 
@@ -46,6 +47,7 @@ func TestEnginePermitsDefaultsToDenyAndHonorsForbid(t *testing.T) {
 	}
 }
 
+// FR-AUTH-25
 func TestEngineUsesEntityHierarchy(t *testing.T) {
 	policies := staticPolicies(`@id("folder-reader") permit(principal, action == Action::"read", resource in Folder::"shared");`)
 	entities := staticEntities(`[
@@ -62,6 +64,7 @@ func TestEngineUsesEntityHierarchy(t *testing.T) {
 	}
 }
 
+// FR-AUTH-26
 func TestEngineRejectsInvalidConstructionSourcesAndEntities(t *testing.T) {
 	for name, options := range map[string]authcedar.Options{
 		"missing policies": {Entities: emptyEntities{}},
@@ -102,6 +105,7 @@ func TestEngineRejectsInvalidConstructionSourcesAndEntities(t *testing.T) {
 	}
 }
 
+// FR-AUTH-26
 func TestEngineRejectsOversizedSourcesBeforeCopying(t *testing.T) {
 	oversized := borrowedPolicies(strings.Repeat(" ", 1<<20+1))
 	engine := newEngine(t, oversized, emptyEntities{})
@@ -121,6 +125,7 @@ func TestEngineRejectsOversizedSourcesBeforeCopying(t *testing.T) {
 	}
 }
 
+// FR-AUTH-26
 func TestEngineRejectsDuplicateAndInvalidEntityUIDs(t *testing.T) {
 	valid := `{"uid":{"type":"Document","id":"doc-1"},"attrs":{},"parents":[]}`
 	cases := map[string]string{
@@ -142,6 +147,7 @@ func TestEngineRejectsDuplicateAndInvalidEntityUIDs(t *testing.T) {
 	}
 }
 
+// FR-AUTH-26
 func TestEngineValidatesEntityIdentifiers(t *testing.T) {
 	engine := newEngine(t, staticPolicies(basicPolicies), emptyEntities{})
 	valid := request("read", map[string]any{"blocked": false})
@@ -158,6 +164,7 @@ func TestEngineValidatesEntityIdentifiers(t *testing.T) {
 	}
 }
 
+// FR-AUTH-26
 func TestEngineConvertsBoundedContextAndRejectsAmbiguity(t *testing.T) {
 	policies := staticPolicies(`@id("context") permit(principal, action, resource) when { context.enabled && context.count == 7 && context.tags.contains("a") && context.nested.ok };`)
 	engine := newEngine(t, policies, emptyEntities{})
@@ -188,6 +195,7 @@ func TestEngineConvertsBoundedContextAndRejectsAmbiguity(t *testing.T) {
 	}
 }
 
+// FR-AUTH-26
 func TestEngineDeepCopiesRequestBeforeCallingEntitySource(t *testing.T) {
 	contextValues := map[string]any{
 		"nested":  map[string]any{"value": "original"},
@@ -206,6 +214,7 @@ func TestEngineDeepCopiesRequestBeforeCallingEntitySource(t *testing.T) {
 	}
 }
 
+// FR-AUTH-25
 func TestEngineDeniesEvaluationErrorsWithDeterministicSanitizedDiagnostics(t *testing.T) {
 	policies := staticPolicies(`
 		@id("z-policy") permit(principal, action, resource) when { context.missing };
@@ -230,6 +239,7 @@ func TestEngineDeniesEvaluationErrorsWithDeterministicSanitizedDiagnostics(t *te
 	}
 }
 
+// FR-AUTH-26
 func TestEngineHonorsCancellation(t *testing.T) {
 	engine := newEngine(t, staticPolicies(basicPolicies), emptyEntities{})
 	ctx, cancel := context.WithCancel(context.Background())

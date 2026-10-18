@@ -14,6 +14,7 @@ import (
 
 const secretToken = "dtc_secretsecretsecretsecret"
 
+// FR-AUTH-09
 func TestCredentialFromAuthorizationHeader(t *testing.T) {
 	t.Parallel()
 	jws := "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJhIn0.c2ln"
@@ -112,6 +113,7 @@ func serve(t *testing.T, handler func(http.Handler) http.Handler, mutate func(*h
 	return out
 }
 
+// FR-AUTH-08
 func TestHTTPAuthenticatesBearerAndCookie(t *testing.T) {
 	t.Parallel()
 	auth := &recordingAuthenticator{}
@@ -139,6 +141,7 @@ func TestHTTPAuthenticatesBearerAndCookie(t *testing.T) {
 	}
 }
 
+// FR-AUTH-08
 func TestHTTPRejections(t *testing.T) {
 	t.Parallel()
 	tests := map[string]struct {
@@ -216,6 +219,7 @@ func TestHTTPRejections(t *testing.T) {
 	}
 }
 
+// FR-AUTH-08
 func TestHTTPAnonymousPassthrough(t *testing.T) {
 	t.Parallel()
 	auth := &recordingAuthenticator{}
@@ -227,6 +231,7 @@ func TestHTTPAnonymousPassthrough(t *testing.T) {
 	}
 }
 
+// FR-AUTH-08
 func TestHTTPChallengeWithoutRealm(t *testing.T) {
 	t.Parallel()
 	got := serve(t, func(next http.Handler) http.Handler { return middleware.HTTP(next, &recordingAuthenticator{}) }, nil)
@@ -235,6 +240,7 @@ func TestHTTPChallengeWithoutRealm(t *testing.T) {
 	}
 }
 
+// FR-AUTH-08
 func TestHTTPPanicsOnInvalidConfiguration(t *testing.T) {
 	t.Parallel()
 	next := http.NotFoundHandler()
@@ -260,6 +266,7 @@ func TestHTTPPanicsOnInvalidConfiguration(t *testing.T) {
 	}
 }
 
+// FR-AUTH-08
 func TestHTTPWithChainAcceptsAPITokenAndJWTShapes(t *testing.T) {
 	t.Parallel()
 	byKind := func(kind string) authentication.Authenticator {
