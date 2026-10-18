@@ -1,57 +1,50 @@
 # Changelog
 
-All notable changes to this module are documented in this file. The format is
-based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
-module follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-While the major version is 0, a minor release may contain breaking changes;
-they are listed here and backed by an ADR.
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+While the major version is `0`, a minor release may break the API.
 
 ## [Unreleased]
 
-Preparation for the first public release.
+## [0.1.0] - 2026-10-18
 
-### Removed (breaking)
-
-- `session.MemoryStore.FailNextCompareAndSwap` and
-  `session.MemoryStore.ObservedGetWhileLocked`, test instrumentation that is
-  now implemented inside the tests (ADR-0009). Remove the calls; no other
-  change is needed.
+First public release.
 
 ### Added
 
-- Package documentation and doc comments for every exported identifier,
-  including the `Options.Clock` fields of `apitoken`, `jwt`, `magiclink`,
-  `oauth2`, `oidc`, `saml` and `session`, which stay public API (nil means
-  `time.Now`; values are used in UTC), and runnable examples (`Example`,
-  `apitoken.ExampleManager`, `middleware.ExampleHTTP`).
-- `SECURITY.md` with the private vulnerability reporting process; `NOTICE`.
-- `docs/`: retrospective PRD (requirements `FR-AUTH-*`, `NFR-AUTH-*`) and
-  ADRs, including the security model (secret handling, constant-time
-  comparisons, expiry, clock-skew and TTL rules).
-- `testing/synctest` tests for JWT expiry with clock skew, the magic-link TTL
-  boundary, OIDC/OAuth2 state expiry, the SAML request TTL and assertion
-  lifetime with skew, and the session lifetime boundary; tests that a
-  supplied `Options.Clock` is honoured in every package that has one.
-- A test that keeps direct third-party imports to the allowlist in ADR-0003.
+- Protocol-neutral contracts: `authentication.Credential`, `Principal`,
+  `Authenticator`, `FederatedProvider` and `Chain`, and
+  `authorization.Request`, `Decision` and `Authorizer`; the two packages do
+  not import each other.
+- `authentication/jwt`: a strict `Verifier` with required issuer, audience,
+  algorithm allowlist, key IDs, maximum lifetime and explicit clock skew.
+- `authentication/apitoken`: long-lived API tokens stored only as SHA-256 or
+  peppered HMAC-SHA256 digests, with scopes, expiry, revocation and a
+  `MemoryStore`.
+- `authentication/middleware`: standard-library `HTTP` middleware with
+  RFC 6750 challenges and `CredentialFromAuthorizationHeader` for other
+  transports.
+- Federated login: `authentication/oidc` and `authentication/oauth2`
+  (authorization code with PKCE) and `authentication/saml` (SAML 2.0 service
+  provider), with provider selection in `authentication/sso` and a
+  metadata cache in `authentication/metadata`.
+- `authentication/magiclink`: single-use magic links with bounded TTLs and
+  exact redirect URIs.
+- `authentication/device`: an OAuth 2.0 device authorization grant
+  (RFC 8628) client.
+- `authentication/session`: durable sessions with rotating refresh tokens,
+  replay detection under a distributed lease, and session and principal
+  revocation.
+- `authorization/cedar`: a Cedar policy `Engine` with request-scoped
+  entities, bounded inputs and default-deny on any evaluation error.
+- Fail-closed sentinel errors such as `authentication.ErrUnauthenticated`,
+  `ErrExpired` and `ErrReplay`.
+- Security policy in `SECURITY.md`; requirements and architecture decision
+  records under `docs/`.
 
-### Changed
+Requires Go 1.26 or newer.
 
-- Minimum Go version is 1.26 (unchanged `go` directive), recorded in ADR-0010;
-  CI tests 1.26, oldstable and stable.
-- CI uses only public dependencies, pins every action to a commit SHA, runs
-  golangci-lint and checks that `go.mod` is tidy; Dependabot keeps Go modules
-  and actions current.
-- OIDC and OAuth2 tests serve token endpoints in memory instead of on
-  loopback sockets.
-
-### Fixed
-
-- `saml` compares the XML decoder's end-of-input error with `errors.Is`.
-
-## [0.4.0] and earlier
-
-Released before this changelog was kept; see the Git history for
-`v0.2.0`, `v0.3.0` and `v0.4.0`.
-
-[Unreleased]: https://github.com/justusschock/auth/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/justusschock/auth/releases/tag/v0.4.0
+[Unreleased]: https://github.com/justusschock/auth/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/justusschock/auth/releases/tag/v0.1.0
