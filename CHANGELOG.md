@@ -8,6 +8,8 @@ While the major version is `0`, a minor release may break the API.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-25
+
 ### Added
 
 - `authorization/cedar`: `Policy`, `Effect` (`Permit`, `Forbid`) and
@@ -63,5 +65,6 @@ First public release.
 
 Requires Go 1.26 or newer.
 
-[Unreleased]: https://github.com/justusschock/auth/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/justusschock/auth/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/justusschock/auth/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/justusschock/auth/releases/tag/v0.1.0
