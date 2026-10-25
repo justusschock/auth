@@ -28,7 +28,7 @@ Requirement area code: `AUTH` (`FR-AUTH-NN`, `NFR-AUTH-NN`).
 | [0009](adr/0009-public-api-boundary.md) | Public API boundary | Accepted |
 | [0010](adr/0010-supported-go-versions.md) | Supported Go versions | Accepted |
 | [0011](adr/0011-testing-strategy.md) | Testing strategy | Accepted |
-| [0012](adr/0012-typed-request-entities-and-structured-policies.md) | Typed request entities and structured Cedar policies | Proposed |
+| [0012](adr/0012-typed-request-entities-and-structured-policies.md) | Typed request entities and structured Cedar policies | Accepted |
 
 ADR-0005 and ADR-0006 together are the library's security model; see also
 [SECURITY.md](../SECURITY.md).
